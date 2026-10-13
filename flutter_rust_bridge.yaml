@@ -1,0 +1,5 @@
+
+rust_input: crate::api
+rust_root: rust/crates/editor_api
+dart_output: apps/mobile/lib/src/rust
+dart_entrypoint_class_name: RustLib

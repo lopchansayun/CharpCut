@@ -1,0 +1,60 @@
+{
+  "project": {
+    "id": "b63e0b72-a30b-4426-b32b-3445491aca9b",
+    "version": 1,
+    "settings": {
+      "width": 1080,
+      "height": 1920,
+      "fps_num": 30,
+      "fps_den": 1
+    },
+    "assets": [
+      {
+        "id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+        "path": "content://media/IMG_0042.mp4",
+        "duration_ms": 4000
+      },
+      {
+        "id": "cde1b00d-b118-4d4f-887c-9c07ebb0c86f",
+        "path": "/storage/emulated/0/DCIM/beach.mov",
+        "duration_ms": 6000
+      }
+    ],
+    "tracks": [
+      {
+        "id": "7f57220a-9845-4334-b39e-3271c13dc148",
+        "kind": "Video",
+        "clips": [
+          {
+            "id": "7f17c2c8-9f34-49b9-bf8a-048686546870",
+            "asset_id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+            "timeline_start_ms": 0,
+            "source_in_ms": 0,
+            "duration_ms": 1500
+          },
+          {
+            "id": "3cbfca0b-2626-4df5-bbe2-823efd55fe82",
+            "asset_id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+            "timeline_start_ms": 1500,
+            "source_in_ms": 1500,
+            "duration_ms": 2500
+          },
+          {
+            "id": "17284484-a4ee-470f-ad10-726c5509130b",
+            "asset_id": "cde1b00d-b118-4d4f-887c-9c07ebb0c86f",
+            "timeline_start_ms": 4000,
+            "source_in_ms": 0,
+            "duration_ms": 6000
+          }
+        ]
+      }
+    ]
+  },
+  "main_track_id": "7f57220a-9845-4334-b39e-3271c13dc148",
+  "selected_clip_id": "3cbfca0b-2626-4df5-bbe2-823efd55fe82",
+  "total_duration_ms": 10000,
+  "can_undo": true,
+  "can_redo": false,
+  "status": "Clip split",
+  "last_error": null
+}

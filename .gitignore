@@ -1,0 +1,15 @@
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.idea/
+.vscode/
+*.iml
+.DS_Store
+target/
+*.log
+
+# Native libraries built by scripts/build-android-lib.ps1
+apps/mobile/android/app/src/main/jniLibs/
