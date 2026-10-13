@@ -12,9 +12,11 @@ This roadmap describes the recommended order for growing CharpCut from its curre
 
 ## Current phase
 
-**Phase 0 (foundation) is complete except for two small items (the Gradle hook and recording known limitations). Phase 1 (engine integration and project persistence) is the current phase.** The project owner reported on 2026-10-13 that `flutter test` passes, `scripts/build-android-lib.ps1` builds without errors, and add clip, trim, split, undo and redo work in `flutter run` on a device. Rust tests also pass (32). Save and reopen has no UI yet, so only Rust tests cover it.
+**Phase 1 is complete, verified by the project owner.** The owner confirmed that all Phase 1 behavior works, including persistence and multiple drafts. This is user-reported Android verification; the assistant did not rerun the app or tests.
 
-Not implemented: media import, thumbnails, preview and playback, audio, text, effects, saving projects to disk from the UI, real export, sharing. The `+` button adds a 3-second placeholder clip (`placeholder://sample.mp4`).
+**Phase 2 implementation is now in place and awaits owner acceptance.** New code adds video/audio/image imports, a persisted media library, metadata, thumbnails/filmstrips, project duplication, and missing-media reporting. See [PHASE2_MEDIA.md](PHASE2_MEDIA.md) for changes, limits, and manual acceptance steps. No build, analyzer, app run, or test execution was performed for this update, following the owner's instruction.
+
+Audio/image timeline placement, text/effects, advanced preview controls, export and sharing remain later phases. The initial Android preview exists; fuller Phase 3 behavior is still incomplete.
 
 ## Where things live
 
@@ -41,7 +43,7 @@ Verified by the project owner on 2026-10-13 (reported, not re-run by the assista
 
 Still open:
 
-- [ ] Verify save and open round-trip end to end (Rust tests cover it; no UI uses it until Phase 1)
+- [x] Verify save and open round-trip on Android after app restart (confirmed by the project owner with the Phase 1 acceptance report).
 - [x] Render-engine decision approved: the first release is Android-only; iOS is a later, separate task (see [decisions/0001-render-engine.md](decisions/0001-render-engine.md))
 
 
@@ -51,31 +53,31 @@ Still open:
 
 **Goal:** Ensure editing commands use one authoritative project state.
 
-- [ ] Route every editing control through `EditorEngine` and the Rust API. (Partial: add, select, split, trim, delete, undo and redo are routed. The Mute toggle and the playhead are local UI state; `move_clip` exists in the timeline crate but is not exposed by the engine or bridge.)
-- [ ] Remove duplicate/mock timeline state from production flows where applicable. (The placeholder clip added by `+` is the remaining mock.)
-- [ ] Complete undo/redo for every supported edit operation. (Done for the current operations; extend it as new ones are added.)
-- [ ] Save and reopen versioned project JSON. (Partial: the Rust API and `EditorEngine` methods exist and are tested in Rust; nothing writes or reads a file from the UI.)
-- [ ] Add autosave and draft recovery.
-- [ ] Add useful validation and user-facing errors for failed operations. (Partial: refused edits set `last_error` and the editor shows it.)
-- [ ] Add engine and bridge integration tests. (Partial: engine unit tests and a snapshot-parsing test exist; no test calls the real bridge.)
+- [x] Route every supported editing control through `EditorEngine` and Rust, including Mute, playhead and clip Move. Seeking is transient session state; mute and reorder are saved edits.
+- [x] Remove duplicate/mock timeline state from production flows. The add button uses Android's system video picker and measured duration. Real filmstrip code has now been added in Phase 2 and awaits manual acceptance.
+- [x] Complete undo/redo for all supported edits, including mute and reorder. No-op controls and seek preserve history and redo; failed operations restore the previous project.
+- [x] Save/reopen versioned project JSON; schema 2 persists mute and migrates schema 1. Initial persistence confirmed working by the owner; extended real bridge tests cover mute and reordered clips.
+- [x] Add autosave and draft recovery. Successful edits including mute/reorder and undo/redo are saved. Initial features confirmed working by the owner; the owner subsequently confirmed all Phase 1 checks passed.
+- [x] Add validation and user-facing errors for refused edits, corrupt/newer files, storage failures, picker failures and invalid video metadata. Rust validates the project after every successful mutation.
+- [x] Add engine and bridge integration tests. (Rust engine tests, Flutter session/storage/widget tests, and `test/rust_bridge_test.dart` calling the actual native Rust bridge. Run `cargo build -p charpcut-editor-api` before Flutter tests to enable the desktop bridge test.)
 
 **Likely locations:** `editor_screen.dart`, `engine/editor_engine.dart`, `engine/rust_engine.dart`, `engine/editor_state.dart`, `rust/crates/editor_api/`, and `rust/crates/timeline/`.
 
-**Acceptance criteria:** UI state consistently matches Rust state; edits survive app restart; undo/redo is reliable.
+**Acceptance criteria:** UI state consistently matches Rust state; edits survive app restart; undo/redo is reliable. The owner confirmed all Phase 1 checks passed, including the previously requested restart and edit checks.
 
 ## Phase 2 — Media import and project management
 
 **Goal:** Let users bring their own media into projects.
 
-- [ ] Import video from Android's system picker.
-- [ ] Import audio and still images.
-- [ ] Handle file permissions and persist access safely or copy media into app-managed storage when needed.
-- [ ] Read duration, dimensions, orientation, frame rate, and audio-stream metadata.
-- [ ] Generate thumbnails and video filmstrips.
-- [ ] Show imported media in a media library.
-- [ ] Create, rename, duplicate, and delete projects.
-- [ ] Display recent drafts on the home screen.
-- [ ] Handle moved, deleted, unsupported, or inaccessible source files.
+- [ ] Import video from Android's system picker. (Expanded media-import implementation added; acceptance pending.)
+- [ ] Import audio and still images. (Implemented into the reusable library; audio/image timeline tracks remain Phase 4.)
+- [ ] Handle file permissions and persist access safely or copy media into app-managed storage when needed. (All three media types are copied into private storage.)
+- [ ] Read duration, dimensions, orientation, frame rate, and audio-stream metadata. (Implemented; unavailable metadata is labeled, average frame-rate fallback is identified.)
+- [ ] Generate thumbnails and video filmstrips. (Implemented with a bounded disk cache and visible timeline tiles.)
+- [ ] Show imported media in a media library. (Implemented with type filters, search, details and video reuse.)
+- [ ] Create, rename, duplicate, and delete projects. (Create/rename/delete confirmed by the owner; independent duplication now implemented, pending acceptance.)
+- [x] Display recent drafts on the home screen. (Owner verified drafts; newly added first-frame thumbnails await Phase 2 acceptance.)
+- [ ] Handle moved, deleted, unsupported, or inaccessible source files. (Private copies survive external moves; import validation, unavailable library entries, and editor source warnings implemented. Automatic relinking is not included.)
 
 **Acceptance criteria:** A user can import media, see its metadata and thumbnail, add it to a project, and reopen the project later.
 
@@ -83,13 +85,13 @@ Still open:
 
 **Goal:** Display and play the actual source media in timeline order.
 
-- [ ] Choose and document the media decoding and rendering architecture before building advanced effects. (Approved in [decisions/0001-render-engine.md](decisions/0001-render-engine.md): Rust edit list plus Android Media3; not yet implemented.)
-- [ ] Implement play/pause and accurate seeking.
-- [ ] Render the clip at the current playhead position.
-- [ ] Synchronize audio and video.
+- [ ] Choose and document the media decoding and rendering architecture before building advanced effects. (Approved: Android Media3. Initial preview consumes source ranges from Rust's validated snapshot; a separate Rust renderer edit-list API remains future work.)
+- [ ] Implement play/pause and accurate seeking. (Code added in the preview fix; intentionally not built or tested, per owner request.)
+- [ ] Render the clip at the current playhead position. (Media3 platform-view code replaces the filename-only preview; manual verification pending.)
+- [ ] Synchronize audio and video. (Native player renders source audio and video together; manual verification pending.)
 - [ ] Handle gaps, black frames, orientation, aspect ratios, and portrait/landscape projects.
-- [ ] Support multiple consecutive clips and transitions in preview.
-- [ ] Handle buffering, decoding errors, and resource cleanup.
+- [ ] Support multiple consecutive clips and transitions in preview. (Clipped playlist code added; transitions remain planned and playlist behavior awaits manual verification.)
+- [ ] Handle buffering, decoding errors, and resource cleanup. (Code added for buffering, errors, background pause and view-disposal cleanup; manual verification pending.)
 
 **Acceptance criteria:** Preview playback reflects the timeline edits and remains synchronized during seeking and playback.
 
@@ -178,7 +180,7 @@ AI features such as background removal, automatic captions, and beat detection s
 
 ## Suggested implementation updates
 
-Each update corresponds roughly to the phases above. None is complete except the foundation parts of Update 01 listed in Phase 0.
+Each update corresponds roughly to the phases above. Phase 1 is owner-verified; the Phase 2 additions await manual acceptance.
 
 | Update | Scope | Completion check |
 |---|---|---|
@@ -211,4 +213,4 @@ An earlier, shorter roadmap used different numbers (its Phase 1 media import and
 
 ## Recommended next step
 
-Start with **Update 01 / Phase 0 verification**, then finish **Phase 1 engine integration and persistence** before building media playback or effects. This reduces the risk of implementing features on top of duplicate or temporary state.
+Manually verify **Phase 2 media import and project management** using [PHASE2_MEDIA.md](PHASE2_MEDIA.md). Phase 1 is confirmed complete. After Phase 2 acceptance, continue with Phase 3 preview behavior.

@@ -28,6 +28,8 @@ pub struct EditorSnapshot {
     pub main_track_id: String,
     pub selected_clip_id: Option<String>,
     pub total_duration_ms: Millis,
+    pub playhead_ms: Millis,
+    pub main_track_muted: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     /// Short message for the last successful edit.
@@ -41,6 +43,7 @@ pub struct Engine {
     project: Project,
     main_track_id: String,
     selected_clip_id: Option<String>,
+    playhead_ms: Millis,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     status: String,
@@ -61,6 +64,7 @@ impl Engine {
             project,
             main_track_id,
             selected_clip_id: None,
+            playhead_ms: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             status: "New project".into(),
@@ -86,6 +90,7 @@ impl Engine {
                 self.project = project;
                 self.main_track_id = main_track_id;
                 self.selected_clip_id = None;
+                self.playhead_ms = 0;
                 self.undo.clear();
                 self.redo.clear();
                 self.succeed("Project opened");
@@ -117,6 +122,30 @@ impl Engine {
     }
 
     // ----- edits -------------------------------------------------------------
+
+    /// Seeking is session state, not an undoable project edit.
+    pub fn seek(&mut self, timeline_ms: Millis) {
+        self.playhead_ms = timeline_ms.min(self.project.total_duration_ms());
+        self.last_error = None;
+    }
+
+    pub fn set_main_track_muted(&mut self, muted: bool) {
+        let track = self.main_track_id.clone();
+        self.edit(if muted { "Track muted" } else { "Track unmuted" }, move |project, _| {
+            project.tracks.iter_mut().find(|t| t.id == track)
+                .ok_or("Video track not found")?.muted = muted;
+            Ok(())
+        });
+    }
+
+    pub fn move_selected(&mut self, target_index: i64) {
+        let track = self.main_track_id.clone();
+        self.edit("Clip moved", move |project, selected| {
+            let clip = selected.as_deref().ok_or("Select a clip first")?;
+            let index = usize::try_from(target_index).map_err(|_| "Clip position must not be negative")?;
+            project.reorder_clip(&track, clip, index).map_err(describe)
+        });
+    }
 
     /// Appends a clip covering the whole of a media file and selects it.
     pub fn add_clip(&mut self, path: &str, duration_ms: Millis) {
@@ -196,6 +225,8 @@ impl Engine {
             main_track_id: self.main_track_id.clone(),
             selected_clip_id: self.selected_clip_id.clone(),
             total_duration_ms: self.project.total_duration_ms(),
+            playhead_ms: self.playhead_ms,
+            main_track_muted: self.project.tracks.iter().find(|t| t.id == self.main_track_id).is_some_and(|t| t.muted),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
             status: self.status.clone(),
@@ -218,13 +249,18 @@ impl Engine {
         change: impl FnOnce(&mut Project, &mut Option<String>) -> Result<(), String>,
     ) {
         let before = self.capture();
-        match change(&mut self.project, &mut self.selected_clip_id) {
+        let result = change(&mut self.project, &mut self.selected_clip_id)
+            .and_then(|_| self.project.validate().map_err(describe));
+        match result {
             Ok(()) => {
-                self.undo.push(before);
-                if self.undo.len() > UNDO_LIMIT {
-                    self.undo.remove(0);
+                if self.project != before.project {
+                    self.undo.push(before);
+                    if self.undo.len() > UNDO_LIMIT {
+                        self.undo.remove(0);
+                    }
+                    self.redo.clear();
                 }
-                self.redo.clear();
+                self.playhead_ms = self.playhead_ms.min(self.project.total_duration_ms());
                 self.succeed(success);
             }
             Err(message) => {
@@ -240,6 +276,7 @@ impl Engine {
 
     fn restore(&mut self, snapshot: Snapshot) {
         self.project = snapshot.project;
+        self.playhead_ms = self.playhead_ms.min(self.project.total_duration_ms());
         self.selected_clip_id = snapshot
             .selected_clip_id
             .filter(|id| self.project.find_clip(id).is_some());
@@ -274,6 +311,91 @@ fn describe(error: TimelineError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mute_is_undoable_and_survives_save_open() {
+        let mut e = engine_with_clip(4_000);
+        e.set_main_track_muted(true);
+        assert!(e.snapshot().main_track_muted);
+        let saved = e.save_json().unwrap();
+        e.undo();
+        assert!(!e.snapshot().main_track_muted);
+        e.redo();
+        assert!(e.snapshot().main_track_muted);
+        e.open_json(&saved);
+        assert!(e.snapshot().main_track_muted);
+    }
+
+    #[test]
+    fn move_is_gapless_undoable_and_keeps_selection() {
+        let mut e = engine_with_clip(4_000);
+        e.add_clip("b.mp4", 3_000);
+        let selected = e.snapshot().selected_clip_id;
+        e.move_selected(0);
+        assert_eq!(clips(&e), vec![(0, 0, 3_000), (3_000, 0, 4_000)]);
+        assert_eq!(e.snapshot().selected_clip_id, selected);
+        e.undo();
+        assert_eq!(clips(&e), vec![(0, 0, 4_000), (4_000, 0, 3_000)]);
+        e.redo();
+        assert_eq!(clips(&e), vec![(0, 0, 3_000), (3_000, 0, 4_000)]);
+        let saved = e.save_json().unwrap();
+        e.open_json(&saved);
+        assert_eq!(clips(&e), vec![(0, 0, 3_000), (3_000, 0, 4_000)]);
+    }
+
+    #[test]
+    fn invalid_move_preserves_project_history_and_selection() {
+        let mut e = engine_with_clip(4_000);
+        let before = e.save_json().unwrap();
+        let selected = e.snapshot().selected_clip_id;
+        for index in [-1, 1, i64::MAX] {
+            e.move_selected(index);
+            assert!(e.snapshot().last_error.is_some());
+            assert_eq!(e.save_json().unwrap(), before);
+            assert_eq!(e.snapshot().selected_clip_id, selected);
+        }
+        e.undo();
+        assert_eq!(e.snapshot().total_duration_ms, 0);
+        assert!(!e.snapshot().can_undo);
+    }
+
+    #[test]
+    fn no_op_controls_and_seek_preserve_redo_and_do_not_add_history() {
+        let mut e = engine_with_clip(4_000);
+        e.set_main_track_muted(true);
+        e.undo();
+        e.set_main_track_muted(false);
+        e.move_selected(0);
+        e.seek(2_000);
+        assert!(e.snapshot().can_redo);
+        e.redo();
+        assert!(e.snapshot().main_track_muted);
+        e.undo();
+        e.undo();
+        assert_eq!(e.snapshot().total_duration_ms, 0);
+        assert!(!e.snapshot().can_undo);
+    }
+
+    #[test]
+    fn playhead_clamps_after_edits_and_history_and_resets_on_open() {
+        let mut e = engine_with_clip(4_000);
+        e.seek(10_000);
+        assert_eq!(e.snapshot().playhead_ms, 4_000);
+        e.trim_selected(0, 2_000);
+        assert_eq!(e.snapshot().playhead_ms, 2_000);
+        e.undo();
+        assert_eq!(e.snapshot().playhead_ms, 2_000);
+        e.seek(3_000);
+        e.redo();
+        assert_eq!(e.snapshot().playhead_ms, 2_000);
+        e.delete_selected();
+        assert_eq!(e.snapshot().playhead_ms, 0);
+        e.undo();
+        e.seek(1_000);
+        let saved = e.save_json().unwrap();
+        e.open_json(&saved);
+        assert_eq!(e.snapshot().playhead_ms, 0);
+    }
 
     fn engine_with_clip(duration: Millis) -> Engine {
         let mut e = Engine::new();
@@ -501,7 +623,7 @@ mod tests {
         for key in ["project", "main_track_id", "selected_clip_id", "total_duration_ms", "can_undo", "can_redo", "status", "last_error"] {
             assert!(v.get(key).is_some(), "missing {key}");
         }
-        assert_eq!(v["project"]["version"], 1);
+        assert_eq!(v["project"]["version"], charpcut_timeline::SCHEMA_VERSION);
         assert_eq!(v["project"]["tracks"][0]["clips"][0]["duration_ms"], 2_000);
     }
 }

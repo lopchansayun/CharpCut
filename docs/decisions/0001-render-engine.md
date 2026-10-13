@@ -1,6 +1,6 @@
 # 0001 - Preview and export engine
 
-Status: **approved** by the project owner on 2026-10-13 (Android first, iOS later). **Not yet implemented:** no `RenderEngine` interface, edit list, or Media3 code exists yet. This unblocks Phase 3 (preview) and Phase 7 (export) in [../FEATURE_ROADMAP.md](../FEATURE_ROADMAP.md).
+Status: **approved** by the project owner on 2026-10-13 (Android first, iOS later). **Partial implementation:** an initial Android Media3 preview now consumes clip paths/ranges from Rust's existing validated snapshot. This code awaits the owner's manual build/test; a dedicated Rust edit-list output and shared preview/export `RenderEngine` interface remain planned. See [../VIDEO_PREVIEW_FIX.md](../VIDEO_PREVIEW_FIX.md) and [../FEATURE_ROADMAP.md](../FEATURE_ROADMAP.md).
 
 ## Context
 Rust owns the project (clips, tracks, undo/redo, saved file). Something else has to decode video, play it

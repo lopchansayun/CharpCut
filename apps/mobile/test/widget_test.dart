@@ -3,11 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:charpcut/main.dart';
 
 import 'support/fake_engine.dart';
+import 'support/video_channel.dart';
 
 /// Wraps a screen with a fresh in-memory engine.
-Widget app(Widget home) => EngineScope(engine: FakeEngine(), child: MaterialApp(home: home));
+Widget app(Widget home) => EngineScope(previewEnabled: false, engine: FakeEngine(), child: MaterialApp(home: home));
 
 void main() {
+  setUp(mockVideoPicker);
   testWidgets('launch screen shows centered CharpCut branding', (WidgetTester tester) async {
     await tester.pumpWidget(CharpCutApp(engine: FakeEngine()));
 

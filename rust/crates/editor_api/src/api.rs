@@ -33,6 +33,27 @@ pub fn get_editor_state() -> String {
     engine().snapshot_json()
 }
 
+/// Clamps the session playhead to the current project duration, without history.
+pub fn seek_playhead(timeline_ms: i64) -> String {
+    let mut e = engine();
+    e.seek(millis(timeline_ms));
+    e.snapshot_json()
+}
+
+/// Sets the main video track's saved, undoable mute flag.
+pub fn set_main_track_muted(muted: bool) -> String {
+    let mut e = engine();
+    e.set_main_track_muted(muted);
+    e.snapshot_json()
+}
+
+/// Moves the selected clip to a final zero-based index on the gapless track.
+pub fn move_selected_clip(target_index: i64) -> String {
+    let mut e = engine();
+    e.move_selected(target_index);
+    e.snapshot_json()
+}
+
 /// Selects a clip, or clears the selection when `clip_id` is `None`.
 pub fn select_clip(clip_id: Option<String>) -> String {
     let mut e = engine();

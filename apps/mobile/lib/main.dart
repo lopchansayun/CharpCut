@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'engine/editor_engine.dart';
 import 'engine/rust_engine.dart';
+import 'engine/project_session.dart';
 import 'home_screen.dart';
 import 'src/rust/frb_generated.dart';
 import 'theme.dart';
@@ -11,7 +12,7 @@ import 'theme.dart';
 export 'editor_screen.dart' show EditorHome;
 export 'engine/editor_engine.dart' show EditorEngine, EngineScope;
 export 'engine/editor_state.dart' show EditorClip, EditorState;
-export 'home_screen.dart' show HomeScreen, CharpProject;
+export 'home_screen.dart' show HomeScreen;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +23,7 @@ Future<void> main() async {
     runApp(StartupFailure(error: error));
     return;
   }
-  runApp(const CharpCutApp(engine: RustEditorEngine()));
+  runApp(CharpCutApp(engine: ProjectSession(const RustEditorEngine(), AndroidProjectStore())));
 }
 
 class CharpCutApp extends StatelessWidget {

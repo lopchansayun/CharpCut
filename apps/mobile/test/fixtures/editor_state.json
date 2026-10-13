@@ -1,7 +1,7 @@
 {
   "project": {
-    "id": "b63e0b72-a30b-4426-b32b-3445491aca9b",
-    "version": 1,
+    "id": "5b1227d5-9c18-4426-a044-82c632f87a09",
+    "version": 2,
     "settings": {
       "width": 1080,
       "height": 1920,
@@ -10,38 +10,39 @@
     },
     "assets": [
       {
-        "id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+        "id": "26418515-68a4-45c0-86e7-4423fc93458a",
         "path": "content://media/IMG_0042.mp4",
         "duration_ms": 4000
       },
       {
-        "id": "cde1b00d-b118-4d4f-887c-9c07ebb0c86f",
+        "id": "936a61c1-0b31-4013-984c-dbe4f87672dc",
         "path": "/storage/emulated/0/DCIM/beach.mov",
         "duration_ms": 6000
       }
     ],
     "tracks": [
       {
-        "id": "7f57220a-9845-4334-b39e-3271c13dc148",
+        "id": "87c8f857-3402-454c-9f15-465a790c60c7",
         "kind": "Video",
+        "muted": false,
         "clips": [
           {
-            "id": "7f17c2c8-9f34-49b9-bf8a-048686546870",
-            "asset_id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+            "id": "d0df3c2a-98ff-4f41-a31c-3214ef229904",
+            "asset_id": "26418515-68a4-45c0-86e7-4423fc93458a",
             "timeline_start_ms": 0,
             "source_in_ms": 0,
             "duration_ms": 1500
           },
           {
-            "id": "3cbfca0b-2626-4df5-bbe2-823efd55fe82",
-            "asset_id": "a0aa520c-8c94-4b8b-9d59-305a5b37e73d",
+            "id": "47c3e8aa-ee4d-4684-b7e4-1f7859aed66f",
+            "asset_id": "26418515-68a4-45c0-86e7-4423fc93458a",
             "timeline_start_ms": 1500,
             "source_in_ms": 1500,
             "duration_ms": 2500
           },
           {
-            "id": "17284484-a4ee-470f-ad10-726c5509130b",
-            "asset_id": "cde1b00d-b118-4d4f-887c-9c07ebb0c86f",
+            "id": "17b9e40a-3458-49c6-a779-72fe2bd1bd8f",
+            "asset_id": "936a61c1-0b31-4013-984c-dbe4f87672dc",
             "timeline_start_ms": 4000,
             "source_in_ms": 0,
             "duration_ms": 6000
@@ -50,9 +51,11 @@
       }
     ]
   },
-  "main_track_id": "7f57220a-9845-4334-b39e-3271c13dc148",
-  "selected_clip_id": "3cbfca0b-2626-4df5-bbe2-823efd55fe82",
+  "main_track_id": "87c8f857-3402-454c-9f15-465a790c60c7",
+  "selected_clip_id": "47c3e8aa-ee4d-4684-b7e4-1f7859aed66f",
   "total_duration_ms": 10000,
+  "playhead_ms": 0,
+  "main_track_muted": false,
   "can_undo": true,
   "can_redo": false,
   "status": "Clip split",

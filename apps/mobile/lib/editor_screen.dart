@@ -1,14 +1,20 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'engine/editor_engine.dart';
 import 'engine/editor_state.dart';
+import 'engine/project_session.dart';
+import 'draft_list.dart';
+import 'engine/media_library.dart';
+import 'media_library_screen.dart';
+import 'media_thumbnail.dart';
 import 'export_done_screen.dart';
 import 'export_panel.dart';
 import 'theme.dart';
+import 'video_preview.dart';
 
 /// Width in logical pixels of one second on the timeline.
 const double _pps = 50;
@@ -21,24 +27,30 @@ const double _laneInset = 22;
 
 class EditorHome extends StatefulWidget {
   /// Opens this saved project instead of starting an empty one.
-  const EditorHome({super.key, this.projectJson});
+  const EditorHome({super.key, this.projectJson, this.draftId});
+  final String? draftId;
   final String? projectJson;
 
   @override
   State<EditorHome> createState() => _EditorHomeState();
 }
 
-class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateMixin {
+class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
   late final EditorEngine _engine;
 
   /// Everything about the project comes from the Rust engine; this is its latest answer.
   EditorState _state = EditorState.empty;
 
   final ScrollController _scroll = ScrollController();
-  late final Ticker _ticker;
-  double _startOffset = 0;
+  int _previewSeekSerial = 0;
   bool _playing = false;
-  bool _muted = false;
+  bool _syncingScroll = false;
+  bool _importing = false;
+  String? _checkedMediaPaths;
+  String? _mediaWarning;
+  int? _pendingSeek;
+  bool _pendingSeekFromPlayback = false;
+  Future<void>? _seekFuture;
   bool _snap = true;
 
   final ExportSettings _exportSettings = ExportSettings();
@@ -48,19 +60,37 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _engine = context.getInheritedWidgetOfExactType<EngineScope>()!.engine;
+    WidgetsBinding.instance.addObserver(this);
     final json = widget.projectJson;
-    _run(() => json == null ? _engine.newProject() : _engine.openProjectJson(json), announce: false);
-    _ticker = createTicker(_onTick);
+    _run(() {
+      final engine = _engine;
+      if (widget.draftId != null && engine is ProjectSession) {
+        return engine.openDraft(widget.draftId!);
+      }
+      return json == null ? engine.newProject() : engine.openProjectJson(json);
+    }, announce: false);
     _scroll.addListener(() {
-      if (mounted) setState(() {});
+      if (!_syncingScroll && mounted) {
+        _requestSeek((_scroll.offset / _pps * 1000).round());
+      }
     });
   }
 
   @override
   void dispose() {
-    _ticker.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _pause();
+    } else {
+      _checkedMediaPaths = null;
+      _checkMediaFiles();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -73,9 +103,45 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
 
   double get _totalSeconds => _state.totalSeconds;
 
-  double get _playhead {
-    if (!_scroll.hasClients || !_scroll.position.hasPixels) return 0;
-    return (_scroll.offset / _pps).clamp(0.0, _totalSeconds).toDouble();
+  double get _playhead => _state.playheadMs / 1000;
+
+  // Coalesce drag/player updates while keeping Rust's playhead authoritative.
+  void _requestSeek(int ms, {bool fromPlayback = false}) {
+    _pendingSeek = ms;
+    _pendingSeekFromPlayback = fromPlayback;
+    _seekFuture ??= _drainSeeks();
+  }
+
+  Future<void> _drainSeeks() async {
+    try {
+      while (mounted && _pendingSeek != null) {
+        final target = _pendingSeek!;
+        final fromPlayback = _pendingSeekFromPlayback;
+        _pendingSeek = null;
+        final next = await _engine.seek(target);
+        if (mounted) {
+          setState(() {
+            _state = next;
+            if (!fromPlayback) _previewSeekSerial++;
+          });
+          if (fromPlayback) _syncScrollToEngine();
+        }
+      }
+    } catch (error) {
+      if (mounted) _message('Could not seek: $error');
+    } finally {
+      _seekFuture = null;
+    }
+  }
+
+  void _syncScrollToEngine() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      final target = (_playhead * _pps).clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
+      _syncingScroll = true;
+      _scroll.jumpTo(target);
+      _syncingScroll = false;
+    });
   }
 
   double _startOf(EditorClip clip) => clip.startMs / 1000;
@@ -86,39 +152,41 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
   // Playback
   // -------------------------------------------------------------------------
 
-  void _togglePlay() => _playing ? _pause() : _play();
+  void _togglePlay() {
+    if (_playing) { _pause(); } else { _play(); }
+  }
 
-  void _play() {
-    if (!_scroll.hasClients || _clips.isEmpty) return;
-    if (_scroll.offset >= _scroll.position.maxScrollExtent - 1) _scroll.jumpTo(0);
-    _startOffset = _scroll.offset;
-    setState(() => _playing = true);
-    _ticker.start();
+  Future<void> _play() async {
+    if (_clips.isEmpty) return;
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return _message('Video preview is available on Android');
+    }
+    await _seekFuture;
+    if (!mounted) return;
+    if (_state.playheadMs >= _state.totalDurationMs) {
+      await _run(() => _engine.seek(0), announce: false);
+    }
+    if (mounted) setState(() => _playing = true);
   }
 
   void _pause() {
-    if (_ticker.isActive) _ticker.stop();
     if (_playing && mounted) setState(() => _playing = false);
   }
 
-  void _onTick(Duration elapsed) {
-    if (!_scroll.hasClients) return;
-    final max = _scroll.position.maxScrollExtent;
-    final next = _startOffset + elapsed.inMicroseconds / 1e6 * _pps;
-    if (next >= max) {
-      _scroll.jumpTo(max);
-      _pause();
-    } else {
-      _scroll.jumpTo(next);
-    }
+  void _onPreviewPosition(int ms, bool playing) {
+    if (!mounted || !_playing) return;
+    if (!playing) setState(() => _playing = false);
+    _requestSeek(ms, fromPlayback: true);
+  }
+
+  void _onPreviewError(String message) {
+    if (!mounted) return;
+    _pause();
+    _message(message);
   }
 
   void _seekAfterLayout(double seconds) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      final target = (seconds * _pps).clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
-      _scroll.animateTo(target, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-    });
+    _run(() => _engine.seek((seconds * 1000).round()), announce: false);
   }
 
   // -------------------------------------------------------------------------
@@ -127,6 +195,7 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
 
   /// Runs an engine call, shows the result, and reports a refused edit.
   Future<void> _run(Future<EditorState> Function() call, {bool announce = true}) async {
+    _pause();
     final EditorState next;
     try {
       next = await call();
@@ -135,10 +204,15 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
       return;
     }
     if (!mounted) return;
-    setState(() => _state = next);
+    setState(() { _state = next; _previewSeekSerial++; });
+    _syncScrollToEngine();
+    _checkMediaFiles();
+    final engine = _engine;
     final error = next.lastError;
     if (error != null) {
       _message(error);
+    } else if (engine is ProjectSession && engine.storageError != null) {
+      _message(engine.storageError!);
     } else if (announce && next.status.isNotEmpty) {
       _message(next.status);
     }
@@ -149,9 +223,12 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
   void _redoEdit() => _run(_engine.redo, announce: false);
 
   /// Splits the selected clip at the playhead.
-  void _split() {
+  Future<void> _split() async {
     if (_selected == null) return;
-    _run(() => _engine.splitSelectedAt((_playhead * 1000).round()));
+    _pause();
+    await _seekFuture;
+    if (!mounted) return;
+    await _run(() => _engine.splitSelectedAt(_state.playheadMs));
   }
 
   void _trim() {
@@ -166,14 +243,106 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
     _run(_engine.deleteSelected);
   }
 
-  /// Adds a stand-in clip until media import (Phase 1) can pick real files.
+  Future<void> _checkMediaFiles() async {
+    if (!mounted || !EngineScope.previewEnabledOf(context)) return;
+    final paths = _clips.map((c) => c.path).toSet().toList()..sort();
+    final signature = paths.join('\n');
+    if (_checkedMediaPaths == signature) return;
+    _checkedMediaPaths = signature;
+    try {
+      final missing = await MediaLibrary().unavailablePaths(paths);
+      if (!mounted || _checkedMediaPaths != signature) return;
+      setState(() => _mediaWarning = missing.isEmpty ? null
+          : '${missing.length} source file(s) unavailable. ${missing.first}');
+    } catch (error) {
+      if (mounted && _checkedMediaPaths == signature) {
+        setState(() => _mediaWarning = 'Could not check source files. Reopen the project to retry.');
+      }
+    }
+  }
+
+  Future<void> _browseAudio() async {
+    _pause();
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const MediaLibraryScreen(initialFilter: 'audio')));
+  }
+
+  /// Reuses an imported video or imports a new file, then asks Rust to append it.
   Future<void> _addClip() async {
-    final start = _totalSeconds;
-    await _run(() => _engine.addClip(path: 'placeholder://sample.mp4', durationMs: 3000));
-    _seekAfterLayout(start);
+    if (_importing) return;
+    _pause();
+    setState(() => _importing = true);
+    try {
+      final video = await Navigator.of(context).push<LibraryMedia>(MaterialPageRoute(
+        builder: (_) => const MediaLibraryScreen(selectVideo: true)));
+      _checkedMediaPaths = null;
+      if (video == null || !mounted) return;
+      final start = _totalSeconds;
+      await _run(() => _engine.addClip(path: video.path, durationMs: video.durationMs));
+      if (mounted && _state.lastError == null) _seekAfterLayout(start);
+    } catch (error) {
+      if (mounted) _message('Could not import video: $error');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  Future<void> _move() async {
+    _pause();
+    if (_selected == null) return;
+    final target = await showModalBottomSheet<int>(
+      context: context,
+      builder: (context) => SafeArea(child: ListView(
+        shrinkWrap: true,
+        children: [
+          const ListTile(title: Text('Move clip')),
+          for (var index = 0; index < _clips.length; index++)
+            ListTile(
+              title: Text('Position ${index + 1}: ${_clips[index].name}'),
+              onTap: () => Navigator.pop(context, index),
+            ),
+        ],
+      )),
+    );
+    if (target == null || !mounted) return;
+    await _run(() => _engine.moveSelected(target));
+    if (mounted && _state.lastError == null && _selected != null) {
+      _seekAfterLayout(_selected!.startMs / 1000);
+    }
   }
 
   void _selectClip(String? id) => _run(() => _engine.select(id), announce: false);
+
+  Future<void> _projectAction(String action) async {
+    _pause();
+    final engine = _engine;
+    if (engine is! ProjectSession) {
+      return _message('Project storage is unavailable');
+    }
+    try {
+      if (action == 'save') {
+        await _seekFuture;
+        await engine.save();
+        if (mounted) _message('Project saved on this device');
+      } else {
+        // Flush before switching so a previous autosave failure cannot discard edits.
+        await engine.save();
+        if (!mounted) return;
+        final id = await pickDraft(context, engine);
+        if (id != null && mounted) {
+          _checkedMediaPaths = null;
+          await _run(() => engine.openDraft(id));
+          _seekAfterLayout(0);
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        _message(
+          'Could not ${action == 'save' ? 'save' : 'open'} project: $error',
+        );
+      }
+    }
+  }
 
   void _openEdit() {
     final clip = _clipAt(_playhead);
@@ -265,12 +434,19 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
           IconButton(
             tooltip: 'Close',
             icon: const Icon(Icons.close_rounded, size: 28),
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () {
+              _pause();
+              Navigator.of(context).maybePop();
+            },
           ),
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search_rounded, size: 28),
-            onPressed: () => _message('Search is not available yet'),
+          PopupMenuButton<String>(
+            tooltip: 'Project',
+            icon: const Icon(Icons.folder_outlined, size: 28),
+            onSelected: _projectAction,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'save', child: Text('Save project')),
+              PopupMenuItem(value: 'open', child: Text('Open project')),
+            ],
           ),
           const Spacer(),
           GestureDetector(
@@ -310,34 +486,29 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
             foregroundDecoration: clipSelected
                 ? BoxDecoration(border: Border.all(color: selectionTeal, width: 2))
                 : null,
-            decoration: clip == null
-                ? const BoxDecoration(color: Colors.black)
-                : BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color.lerp(clip.color, Colors.black, .35)!, Color.lerp(clip.color, Colors.black, .85)!],
-                    ),
-                  ),
-            child: Center(
-              child: clip == null
-                  ? const Column(
+            color: Colors.black,
+            child: Stack(fit: StackFit.expand, children: [clip == null
+                  ? const Center(child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.video_library_outlined, size: 34, color: Colors.white38),
                         SizedBox(height: 10),
                         Text('Tap + to add a clip', style: TextStyle(fontSize: 13, color: Colors.white54)),
                       ],
-                    )
-                  : Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.movie_creation_outlined, size: 34, color: Colors.white54),
-                        const SizedBox(height: 10),
-                        Text(clip.name, style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2, fontSize: 15)),
-                      ],
-                    ),
-            ),
+                    ))
+                  : !EngineScope.previewEnabledOf(context)
+                      ? Center(child: Text(clip.name))
+                      : VideoPreview(
+                          state: _state,
+                          playing: _playing,
+                          seekSerial: _previewSeekSerial,
+                          onPosition: _onPreviewPosition,
+                          onError: _onPreviewError,
+                        ),
+              if (_mediaWarning != null) Align(alignment: Alignment.topCenter,
+                child: Container(color: Colors.black87, padding: const EdgeInsets.all(8),
+                  child: Text(_mediaWarning!, style: const TextStyle(color: Colors.amber, fontSize: 12)))),
+            ]),
           ),
         );
       },
@@ -457,16 +628,16 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
                           height: _trackHeight,
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: () => setState(() => _muted = !_muted),
+                            onTap: () => _run(() => _engine.setMuted(!_state.mainTrackMuted)),
                             child: FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(_muted ? Icons.volume_off_outlined : Icons.volume_up_outlined, size: 20),
+                                  Icon(_state.mainTrackMuted ? Icons.volume_off_outlined : Icons.volume_up_outlined, size: 20),
                                   const SizedBox(height: 2),
                                   Text(
-                                    _muted ? 'Unmute' : 'Mute',
+                                    _state.mainTrackMuted ? 'Unmute' : 'Mute',
                                     textAlign: TextAlign.center,
                                     style: const TextStyle(fontSize: 11, height: 1.1),
                                   ),
@@ -508,7 +679,7 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
                         Positioned(
                           left: half - 25 - 30,
                           top: 95,
-                          child: _TrackButton(icon: Icons.music_note_outlined, onTap: () => _message('Audio tools are planned')),
+                          child: _TrackButton(icon: Icons.music_note_outlined, onTap: _browseAudio),
                         ),
                         Positioned(
                           left: half - 25 - 30,
@@ -521,7 +692,7 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
                           top: 95,
                           width: rowW,
                           height: 30,
-                          child: _AddTrackRow(label: 'Add audio', onTap: () => _message('Audio tools are planned')),
+                          child: _AddTrackRow(label: 'Add audio', onTap: _browseAudio),
                         ),
                         Positioned(
                           left: half,
@@ -620,8 +791,10 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
         height: stripHeight,
         child: Stack(
           children: [
-            for (var i = 0; i * 50 < width; i++)
-              Positioned(left: i * 50.0, top: 0, bottom: 0, width: 50, child: _FrameTile(color: clip.color, seed: i)),
+            Positioned.fill(child: MediaFilmstrip(path: clip.path,
+              sourceInMs: clip.sourceInMs, durationMs: clip.durationMs,
+              timelineStartMs: clip.startMs, scroll: _scroll,
+              pixelsPerSecond: _pps, enabled: EngineScope.previewEnabledOf(context))),
             if (selected)
               Positioned(
                 left: 6,
@@ -699,11 +872,12 @@ class _EditorHomeState extends State<EditorHome> with SingleTickerProviderStateM
             _ToolItem(width: itemW, icon: Icons.play_circle_outline_rounded, label: 'Animations', onTap: () => _message('Animations are planned')),
             _ToolItem(width: itemW, icon: Icons.stars_outlined, label: 'Effects', onTap: () => _message('Effects are planned')),
             _ToolItem(width: itemW, icon: Icons.delete_outline_rounded, label: 'Delete', onTap: _delete),
+            _ToolItem(width: itemW, icon: Icons.swap_horiz_rounded, label: 'Move', onTap: _move),
           ]
         : <Widget>[
             const SizedBox(width: 8),
             _ToolItem(width: itemW, icon: Icons.content_cut_rounded, label: 'Edit', onTap: _openEdit),
-            _ToolItem(width: itemW, icon: Icons.music_note_outlined, label: 'Audio', onTap: () => _message('Audio tools are planned')),
+            _ToolItem(width: itemW, icon: Icons.music_note_outlined, label: 'Audio', onTap: _browseAudio),
             _ToolItem(width: itemW, icon: Icons.title_rounded, label: 'Text', onTap: () => _message('Text tools are planned')),
             _ToolItem(width: itemW, icon: Icons.stars_outlined, label: 'Effects', onTap: () => _message('Effects are planned')),
             _ToolItem(width: itemW, icon: Icons.filter_frames_outlined, label: 'Overlay', onTap: () => _message('Overlays are planned')),
@@ -808,28 +982,6 @@ class _Handle extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(color: const Color(0xFFB0B0B5), borderRadius: BorderRadius.circular(2)),
   );
-}
-
-/// One "frame" of the clip filmstrip. There is no media decoding yet, so these
-/// are tinted gradient swatches that read as a thumbnail strip.
-class _FrameTile extends StatelessWidget {
-  const _FrameTile({required this.color, required this.seed});
-  final Color color;
-  final int seed;
-  @override
-  Widget build(BuildContext context) {
-    final lift = (seed % 3) * .06;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: seed.isEven ? Alignment.topLeft : Alignment.topRight,
-          end: Alignment.bottomCenter,
-          colors: [Color.lerp(color, Colors.white, .12 + lift)!, Color.lerp(color, Colors.black, .6)!],
-        ),
-        border: const Border(right: BorderSide(color: Colors.black38, width: .5)),
-      ),
-    );
-  }
 }
 
 class _SnapIcon extends StatelessWidget {

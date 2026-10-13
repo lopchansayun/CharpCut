@@ -21,6 +21,8 @@ void main() {
     expect(s.canRedo, isFalse);
     expect(s.status, 'Clip split');
     expect(s.lastError, isNull);
+    expect(s.playheadMs, 0);
+    expect(s.mainTrackMuted, false);
     // The second half of the split is selected.
     expect(s.selectedClip?.startMs, 1500);
   });

@@ -2,18 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'editor_screen.dart';
+import 'draft_list.dart';
+import 'media_library_screen.dart';
+import 'engine/editor_engine.dart';
+import 'engine/project_session.dart';
 import 'theme.dart';
-
-/// A draft shown in the recent-projects strip.
-class CharpProject {
-  const CharpProject({required this.name, required this.isVideo, required this.colors});
-  final String name;
-  final bool isVideo;
-  final List<Color> colors;
-}
-
-/// Saved drafts. Empty until project saving is implemented.
-const _projects = <CharpProject>[];
 
 class _Tool {
   const _Tool(this.label, this.icon);
@@ -36,8 +29,8 @@ const _tools = <_Tool>[
   _Tool('Marketing tools', Icons.work_outline_rounded),
 ];
 
-void _openEditor(BuildContext context) {
-  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditorHome()));
+Future<void> _openEditor(BuildContext context) async {
+  await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditorHome()));
 }
 
 class HomeScreen extends StatefulWidget {
@@ -100,8 +93,17 @@ class _EditTab extends StatelessWidget {
                   const SizedBox(height: 16),
                   const _CreateCards(),
                   const SizedBox(height: 16),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: ListTile(
+                      leading: const Icon(Icons.perm_media_outlined),
+                      title: const Text('Media library'),
+                      subtitle: const Text('Import videos, audio and images'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => const MediaLibraryScreen())),
+                    )),
                   const _RecentStrip(),
-                  SizedBox(height: _projects.isEmpty ? 6 : 22),
+                  const SizedBox(height: 16),
                   const _ToolGrid(),
                   const SizedBox(height: 16),
                 ],
@@ -329,67 +331,21 @@ class _CreateCard extends StatelessWidget {
 class _RecentStrip extends StatelessWidget {
   const _RecentStrip();
   @override
-  Widget build(BuildContext context) => _projects.isEmpty ? const SizedBox.shrink() : SizedBox(
-    height: 68,
-    child: ListView(
-      scrollDirection: Axis.horizontal,
+  Widget build(BuildContext context) {
+    final engine = EngineScope.of(context);
+    if (engine is! ProjectSession) return const SizedBox.shrink();
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      children: [
-        for (final p in _projects) ...[
-          _ProjectTile(project: p, size: 68, onTap: () => _openEditor(context)),
-          const SizedBox(width: 9),
-        ],
-        Container(
-          width: 68,
-          height: 68,
-          decoration: BoxDecoration(color: const Color(0xFFEFF3F9), borderRadius: BorderRadius.circular(14)),
-          child: const Icon(Icons.chevron_right_rounded, color: homeMuted),
-        ),
-      ],
-    ),
-  );
-}
-
-class _ProjectTile extends StatelessWidget {
-  const _ProjectTile({required this.project, required this.size, required this.onTap});
-  final CharpProject project;
-  final double size;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: project.colors),
-      ),
-      alignment: Alignment.bottomLeft,
-      padding: const EdgeInsets.fromLTRB(5, 0, 4, 5),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(project.isVideo ? Icons.content_cut_rounded : Icons.image_outlined, size: 11, color: Colors.white),
-          const SizedBox(width: 3),
-          Flexible(
-            child: Text(
-              project.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                shadows: [Shadow(color: Colors.black54, blurRadius: 3)],
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Your drafts', style: TextStyle(fontSize: 18,
+            fontWeight: FontWeight.w700, color: homeInk)),
+        DraftList(session: engine, onOpen: (id) async {
+          await Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => EditorHome(draftId: id)));
+        }),
+      ]),
+    );
+  }
 }
 
 class _ToolGrid extends StatelessWidget {
@@ -433,28 +389,29 @@ class _ToolGrid extends StatelessWidget {
 class _ProjectsTab extends StatelessWidget {
   const _ProjectsTab();
   @override
-  Widget build(BuildContext context) => SafeArea(
-    child: ListView(
+  Widget build(BuildContext context) {
+    final engine = EngineScope.of(context);
+    return SafeArea(child: ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Projects', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: homeInk)),
-        const SizedBox(height: 16),
-        if (_projects.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(top: 40),
-            child: Center(child: Text('No projects yet', style: TextStyle(color: homeMuted, fontSize: 15))),
-          )
+        const Text('Projects', style: TextStyle(fontSize: 24,
+            fontWeight: FontWeight.w800, color: homeInk)),
+        const SizedBox(height: 12),
+        const Text('Each video has its own autosaved draft on this device. Tap a draft to continue, or use its menu to rename, duplicate or delete it.'),
+        const SizedBox(height: 12),
+        FilledButton.icon(onPressed: () => _openEditor(context),
+            icon: const Icon(Icons.add), label: const Text('New video')),
+        const SizedBox(height: 12),
+        if (engine is ProjectSession)
+          DraftList(session: engine, onOpen: (id) async {
+            await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => EditorHome(draftId: id)));
+          })
         else
-          Wrap(
-            spacing: 9,
-            runSpacing: 9,
-            children: [
-              for (final p in _projects) _ProjectTile(project: p, size: 100, onTap: () => _openEditor(context)),
-            ],
-          ),
+          const Text('Project storage is unavailable'),
       ],
-    ),
-  );
+    ));
+  }
 }
 
 class _PlaceholderTab extends StatelessWidget {

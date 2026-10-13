@@ -9,6 +9,13 @@ class RustEditorEngine implements EditorEngine {
   EditorState _read(String json) => EditorState.fromJson(json);
 
   @override
+  Future<EditorState> seek(int timelineMs) async => _read(await rust.seekPlayhead(timelineMs: timelineMs));
+  @override
+  Future<EditorState> setMuted(bool muted) async => _read(await rust.setMainTrackMuted(muted: muted));
+  @override
+  Future<EditorState> moveSelected(int targetIndex) async => _read(await rust.moveSelectedClip(targetIndex: targetIndex));
+
+  @override
   Future<EditorState> newProject() async => _read(await rust.newProject());
 
   @override

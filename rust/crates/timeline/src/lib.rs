@@ -6,7 +6,7 @@ pub type Millis = u64;
 
 /// Version written into every saved project. Bump when the on-disk shape changes
 /// in a way older builds cannot read, and add a migration in [`Project::from_json`].
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Shortest clip the editor will create by splitting or trimming.
 pub const MIN_CLIP_MS: Millis = 100;
@@ -39,6 +39,7 @@ pub struct MediaAsset {
 pub struct Track {
     pub id: String,
     pub kind: TrackKind,
+    pub muted: bool,
     pub clips: Vec<Clip>,
 }
 
@@ -103,7 +104,7 @@ impl Project {
 
     pub fn add_track(&mut self, kind: TrackKind) -> String {
         let id = Uuid::new_v4().to_string();
-        self.tracks.push(Track { id: id.clone(), kind, clips: Vec::new() });
+        self.tracks.push(Track { id: id.clone(), kind, muted: false, clips: Vec::new() });
         id
     }
 
@@ -186,6 +187,27 @@ impl Project {
             .ok_or(TimelineError::ClipNotFound)?;
         clip.timeline_start_ms = new_timeline_start_ms;
         track.clips.sort_by_key(|c| c.timeline_start_ms);
+        Ok(())
+    }
+
+    /// Reorders a clip to a final index and repacks this track without gaps.
+    pub fn reorder_clip(&mut self, track_id: &str, clip_id: &str, target_index: usize) -> Result<(), TimelineError> {
+        let track = self.tracks.iter_mut().find(|t| t.id == track_id)
+            .ok_or(TimelineError::TrackNotFound)?;
+        let index = track.clips.iter().position(|c| c.id == clip_id)
+            .ok_or(TimelineError::ClipNotFound)?;
+        if target_index >= track.clips.len() {
+            return Err(TimelineError::InvalidProject("clip position is outside the track".into()));
+        }
+        if index == target_index { return Ok(()); }
+        let clip = track.clips.remove(index);
+        track.clips.insert(target_index, clip);
+        let mut cursor: Millis = 0;
+        for clip in &mut track.clips {
+            clip.timeline_start_ms = cursor;
+            cursor = cursor.checked_add(clip.duration_ms)
+                .ok_or_else(|| TimelineError::InvalidProject("timeline duration is too large".into()))?;
+        }
         Ok(())
     }
 
@@ -351,8 +373,15 @@ impl Project {
         if probe.version == 0 || probe.version > SCHEMA_VERSION {
             return Err(TimelineError::UnsupportedVersion(probe.version));
         }
-        // Migrations for older versions go here once SCHEMA_VERSION > 1.
-        let project: Project = serde_json::from_str(json).map_err(|e| TimelineError::Json(e.to_string()))?;
+        let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| TimelineError::Json(e.to_string()))?;
+        if probe.version == 1 {
+            // v1 did not persist mute. Always migrate to the historical unmuted default.
+            if let Some(tracks) = value["tracks"].as_array_mut() {
+                for track in tracks { track["muted"] = serde_json::Value::Bool(false); }
+            }
+            value["version"] = serde_json::Value::from(SCHEMA_VERSION);
+        }
+        let project: Project = serde_json::from_value(value).map_err(|e| TimelineError::Json(e.to_string()))?;
         project.validate()?;
         Ok(project)
     }
@@ -368,6 +397,50 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_one_migrates_to_unmuted_version_two() {
+        let (p, _, _, _) = sample();
+        let mut value = serde_json::to_value(&p).unwrap();
+        value["version"] = 1.into();
+        value["tracks"][0].as_object_mut().unwrap().remove("muted");
+        let migrated = Project::from_json(&value.to_string()).unwrap();
+        assert_eq!(migrated.version, SCHEMA_VERSION);
+        assert!(!migrated.tracks[0].muted);
+        assert_eq!(migrated.tracks[0].clips, p.tracks[0].clips);
+    }
+
+    #[test]
+    fn version_two_requires_a_valid_mute_field() {
+        let (p, _, _, _) = sample();
+        let mut value = serde_json::to_value(&p).unwrap();
+        value["tracks"][0].as_object_mut().unwrap().remove("muted");
+        assert!(Project::from_json(&value.to_string()).is_err());
+        value["tracks"][0]["muted"] = "yes".into();
+        assert!(Project::from_json(&value.to_string()).is_err());
+    }
+
+    #[test]
+    fn reorder_preserves_source_ranges_and_repacks_track() {
+        let (mut p, track, asset, first) = sample();
+        let second = p.append_clip(&track, &asset, 6_000, 2_000).unwrap();
+        p.reorder_clip(&track, &second, 0).unwrap();
+        assert_eq!(p.tracks[0].clips[0].id, second);
+        assert_eq!(p.tracks[0].clips[0].source_in_ms, 6_000);
+        assert_eq!(p.tracks[0].clips[0].timeline_start_ms, 0);
+        assert_eq!(p.tracks[0].clips[1].id, first);
+        assert_eq!(p.tracks[0].clips[1].timeline_start_ms, 2_000);
+        assert_eq!(p.total_duration_ms(), 7_000);
+        p.validate().unwrap();
+    }
+
+    #[test]
+    fn invalid_reorder_does_not_modify_project() {
+        let (mut p, track, _, clip) = sample();
+        let before = p.clone();
+        assert!(p.reorder_clip(&track, &clip, 1).is_err());
+        assert_eq!(p, before);
+    }
 
     fn sample() -> (Project, String, String, String) {
         let mut p = Project::new(1080, 1920, 30, 1);

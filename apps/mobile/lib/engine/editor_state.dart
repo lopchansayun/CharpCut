@@ -11,11 +11,13 @@ class EditorClip {
     required this.startMs,
     required this.sourceInMs,
     required this.durationMs,
+    this.path = '',
   });
 
   final String id;
   final String assetId;
   final String name;
+  final String path;
 
   /// Stand-in tint for the filmstrip until real thumbnails exist.
   final Color color;
@@ -34,6 +36,8 @@ class EditorState {
     this.clips = const [],
     this.selectedClipId,
     this.totalDurationMs = 0,
+    this.playheadMs = 0,
+    this.mainTrackMuted = false,
     this.canUndo = false,
     this.canRedo = false,
     this.status = '',
@@ -46,6 +50,8 @@ class EditorState {
   final List<EditorClip> clips;
   final String? selectedClipId;
   final int totalDurationMs;
+  final int playheadMs;
+  final bool mainTrackMuted;
   final bool canUndo;
   final bool canRedo;
 
@@ -104,6 +110,7 @@ class EditorState {
           id: clip['id'] as String,
           assetId: assetId,
           name: displayName(assetPaths[assetId] ?? ''),
+          path: assetPaths[assetId] ?? '',
           color: tintFor(assetId),
           startMs: (clip['timeline_start_ms'] as num).toInt(),
           sourceInMs: (clip['source_in_ms'] as num).toInt(),
@@ -117,6 +124,8 @@ class EditorState {
       clips: List.unmodifiable(clips),
       selectedClipId: root['selected_clip_id'] as String?,
       totalDurationMs: (root['total_duration_ms'] as num? ?? 0).toInt(),
+      playheadMs: (root['playhead_ms'] as num? ?? 0).toInt(),
+      mainTrackMuted: root['main_track_muted'] as bool? ?? false,
       canUndo: root['can_undo'] as bool? ?? false,
       canRedo: root['can_redo'] as bool? ?? false,
       status: root['status'] as String? ?? '',

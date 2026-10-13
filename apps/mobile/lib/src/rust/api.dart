@@ -6,43 +6,65 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `engine`, `millis`
 
-            // These functions are ignored because they are not marked as `pub`: `engine`, `millis`
-
-
-            /// Starts an empty project and returns its state.
-Future<String>  newProject() => RustLib.instance.api.crateApiNewProject();
+/// Starts an empty project and returns its state.
+Future<String> newProject() => RustLib.instance.api.crateApiNewProject();
 
 /// Returns the current editor state.
-Future<String>  getEditorState() => RustLib.instance.api.crateApiGetEditorState();
+Future<String> getEditorState() =>
+    RustLib.instance.api.crateApiGetEditorState();
+
+/// Clamps the session playhead to the current project duration, without history.
+Future<String> seekPlayhead({required PlatformInt64 timelineMs}) =>
+    RustLib.instance.api.crateApiSeekPlayhead(timelineMs: timelineMs);
+
+/// Sets the main video track's saved, undoable mute flag.
+Future<String> setMainTrackMuted({required bool muted}) =>
+    RustLib.instance.api.crateApiSetMainTrackMuted(muted: muted);
+
+/// Moves the selected clip to a final zero-based index on the gapless track.
+Future<String> moveSelectedClip({required PlatformInt64 targetIndex}) =>
+    RustLib.instance.api.crateApiMoveSelectedClip(targetIndex: targetIndex);
 
 /// Selects a clip, or clears the selection when `clip_id` is `None`.
-Future<String>  selectClip({String? clipId }) => RustLib.instance.api.crateApiSelectClip(clipId: clipId);
+Future<String> selectClip({String? clipId}) =>
+    RustLib.instance.api.crateApiSelectClip(clipId: clipId);
 
 /// Appends a clip covering a whole media file and selects it.
-Future<String>  addClip({required String path , required PlatformInt64 durationMs }) => RustLib.instance.api.crateApiAddClip(path: path, durationMs: durationMs);
+Future<String> addClip({
+  required String path,
+  required PlatformInt64 durationMs,
+}) => RustLib.instance.api.crateApiAddClip(path: path, durationMs: durationMs);
 
 /// Splits the selected clip at a position on the timeline (the playhead).
-Future<String>  splitSelectedClipAt({required PlatformInt64 timelineMs }) => RustLib.instance.api.crateApiSplitSelectedClipAt(timelineMs: timelineMs);
+Future<String> splitSelectedClipAt({required PlatformInt64 timelineMs}) =>
+    RustLib.instance.api.crateApiSplitSelectedClipAt(timelineMs: timelineMs);
 
 /// Sets the source start and length of the selected clip.
-Future<String>  trimSelectedClip({required PlatformInt64 sourceInMs , required PlatformInt64 durationMs }) => RustLib.instance.api.crateApiTrimSelectedClip(sourceInMs: sourceInMs, durationMs: durationMs);
+Future<String> trimSelectedClip({
+  required PlatformInt64 sourceInMs,
+  required PlatformInt64 durationMs,
+}) => RustLib.instance.api.crateApiTrimSelectedClip(
+  sourceInMs: sourceInMs,
+  durationMs: durationMs,
+);
 
 /// Deletes the selected clip.
-Future<String>  deleteSelectedClip() => RustLib.instance.api.crateApiDeleteSelectedClip();
+Future<String> deleteSelectedClip() =>
+    RustLib.instance.api.crateApiDeleteSelectedClip();
 
 /// Undoes the last edit.
-Future<String>  undo() => RustLib.instance.api.crateApiUndo();
+Future<String> undo() => RustLib.instance.api.crateApiUndo();
 
 /// Redoes the last undone edit.
-Future<String>  redo() => RustLib.instance.api.crateApiRedo();
+Future<String> redo() => RustLib.instance.api.crateApiRedo();
 
 /// The project as JSON, ready to be written to a file. Empty if it could not be produced.
-Future<String>  exportProjectJson() => RustLib.instance.api.crateApiExportProjectJson();
+Future<String> exportProjectJson() =>
+    RustLib.instance.api.crateApiExportProjectJson();
 
 /// Replaces the project with one read from saved JSON. A bad file leaves the current
 /// project alone and is reported in `last_error`.
-Future<String>  openProjectJson({required String json }) => RustLib.instance.api.crateApiOpenProjectJson(json: json);
-
-            
-            
+Future<String> openProjectJson({required String json}) =>
+    RustLib.instance.api.crateApiOpenProjectJson(json: json);

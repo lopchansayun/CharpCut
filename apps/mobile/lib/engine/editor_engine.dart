@@ -12,6 +12,9 @@ abstract class EditorEngine {
   Future<EditorState> newProject();
   Future<EditorState> getState();
   Future<EditorState> select(String? clipId);
+  Future<EditorState> seek(int timelineMs);
+  Future<EditorState> setMuted(bool muted);
+  Future<EditorState> moveSelected(int targetIndex);
 
   /// Appends a clip covering a whole media file and selects it.
   Future<EditorState> addClip({required String path, required int durationMs});
@@ -34,9 +37,14 @@ abstract class EditorEngine {
 
 /// Makes the engine available to every screen below it.
 class EngineScope extends InheritedWidget {
-  const EngineScope({super.key, required this.engine, required super.child});
+  const EngineScope({super.key, required this.engine, required super.child, this.previewEnabled = true});
 
   final EditorEngine engine;
+  /// Widget tests can substitute the preview without starting a native decoder.
+  final bool previewEnabled;
+
+  static bool previewEnabledOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<EngineScope>()!.previewEnabled;
 
   static EditorEngine of(BuildContext context) {
     final scope = context.dependOnInheritedWidgetOfExactType<EngineScope>();
@@ -45,5 +53,5 @@ class EngineScope extends InheritedWidget {
   }
 
   @override
-  bool updateShouldNotify(EngineScope old) => engine != old.engine;
+  bool updateShouldNotify(EngineScope old) => engine != old.engine || previewEnabled != old.previewEnabled;
 }
