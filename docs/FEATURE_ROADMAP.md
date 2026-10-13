@@ -12,7 +12,7 @@ This roadmap describes the recommended order for growing CharpCut from its curre
 
 ## Current phase
 
-**Phase 0 (foundation) is in progress.** The Rust engine, the bridge, and the Flutter wiring exist, and the 32 Rust tests pass. Not yet confirmed: the Flutter test suite on the latest code, the Android library build, and a run on a device. Phase 1 is partly done (engine routing, undo/redo) and the rest of it should wait for Phase 0 verification.
+**Phase 0 (foundation) is complete except for two small items (the Gradle hook and recording known limitations). Phase 1 (engine integration and project persistence) is the current phase.** The project owner reported on 2026-10-13 that `flutter test` passes, `scripts/build-android-lib.ps1` builds without errors, and add clip, trim, split, undo and redo work in `flutter run` on a device. Rust tests also pass (32). Save and reopen has no UI yet, so only Rust tests cover it.
 
 Not implemented: media import, thumbnails, preview and playback, audio, text, effects, saving projects to disk from the UI, real export, sharing. The `+` button adds a 3-second placeholder clip (`placeholder://sample.mp4`).
 
@@ -33,15 +33,18 @@ Built so far:
 - [x] Render-engine decision written down and approved by the project owner on 2026-10-13: Android first, iOS later ([decisions/0001-render-engine.md](decisions/0001-render-engine.md))
 - [x] `cargo test` from `rust/` passes (13 timeline + 19 engine tests; run during the documentation cleanup)
 
-Verification still open:
+Verified by the project owner on 2026-10-13 (reported, not re-run by the assistant):
 
-- [ ] Run `flutter test` from `apps/mobile/` and confirm it passes on the latest code (an earlier run failed with two layout overflows in the timeline's left cluster; a fix was made but not yet re-run)
-- [!] Build the Rust shared library for the target Android ABI(s) with `scripts/build-android-lib.ps1` (needs the NDK and `ANDROID_NDK_HOME`; the script has not been confirmed to work, and a device run reported `libcharpcut_editor_api.so not found` before it was built)
-- [ ] Confirm the `.so` is packaged in the APK and `RustLib.init()` loads it on a real device
-- [ ] Verify create project, add clip, split, undo, redo round-trip on a device; save and open round-trip is covered by Rust tests only (no UI for it yet)
+- [x] `flutter test` from `apps/mobile/` passes
+- [x] `scripts/build-android-lib.ps1` builds the Rust shared library without errors
+- [x] The library loads on a real device (no startup-failure screen) and add clip, trim, split, undo and redo work through Rust
+
+Still open:
+
+- [ ] Verify save and open round-trip end to end (Rust tests cover it; no UI uses it until Phase 1)
 - [ ] Replace the manual library build with a Gradle hook so `flutter run` builds Rust automatically
 - [x] Render-engine decision approved: the first release is Android-only; iOS is a later, separate task (see [decisions/0001-render-engine.md](decisions/0001-render-engine.md))
-- [ ] Record known limitations in the README once the above is verified
+- [ ] Record known limitations in the README
 
 **Acceptance criteria:** Rust and Flutter tests pass; the app launches on Android without the startup-failure screen; a basic edit can be made, undone and redone on the device; a project exported with `export_project_json` and reopened with `open_project_json` matches the original.
 
@@ -167,7 +170,7 @@ AI features such as background removal, automatic captions, and beat detection s
 
 ## Phase dependencies and risks
 
-- Phase 0 verification gates everything: features cannot be tested on a device until the Rust library loads there.
+- Phase 0 verification (done) gated everything: the Rust library now loads on a device.
 - Phase 3 (preview) and Phase 7 (export) depend on the render-engine decision. The decision proposes Android first through Media3, with Rust producing an edit list the renderer consumes; iOS roughly doubles both phases.
 - Phase 2 (import) must come before Phase 3 and Phase 7: previewing and exporting need real media paths, not the placeholder clip.
 - Phase 4 properties (scale, rotation, opacity, volume, speed) and the Phase 5 and Phase 6 features need new fields in the project format, so bump `SCHEMA_VERSION` and add migrations.

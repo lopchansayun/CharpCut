@@ -51,7 +51,7 @@ Only when `rust/crates/editor_api/src/api.rs` changes, regenerate the bridge bin
 
 - Working: home screen, editor screen, export settings panel and export-complete screen (UI). The editor starts empty and every edit (add, select, split, trim, delete, undo, redo) goes through the Rust engine.
 - Placeholders: media import (the add button inserts a 3-second placeholder clip), real preview and playback, thumbnails, audio and text tools, effects, saving projects to disk, real export and sharing. The export flow only plays the screens; it writes no file.
-- Verified by running `cargo test` in `rust/` (19 engine tests and 13 timeline tests pass). The Flutter tests and the Android build and device run have not been confirmed in this documentation pass; see Phase 0 in the roadmap.
+- Verified: `cargo test` in `rust/` (19 engine + 13 timeline tests pass). The project owner reports that `flutter test` passes, the Android library builds, and add, trim, split, undo and redo work on a device. Next: Phase 1 in the roadmap.
 
 ## Documentation
 

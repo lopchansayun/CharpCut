@@ -103,7 +103,7 @@ Nothing in the Gradle build creates the Rust library yet (**Planned**: a Gradle 
 .\scripts\build-android-lib.ps1
 ```
 
-It needs the Android NDK (`ANDROID_NDK_HOME`), adds the three Android Rust targets, installs `cargo-ndk`, and writes arm64-v8a, armeabi-v7a and x86_64 libraries into `apps/mobile/android/app/src/main/jniLibs/`. This script has not been confirmed to work end to end; if it fails, the output of the failing step is needed to diagnose.
+It needs the Android NDK (`ANDROID_NDK_HOME`), adds the three Android Rust targets, installs `cargo-ndk`, and writes arm64-v8a, armeabi-v7a and x86_64 libraries into `apps/mobile/android/app/src/main/jniLibs/`. The project owner reported on 2026-10-13 that it builds without errors and the app loads the library on a device.
 
 ### Debugging
 
