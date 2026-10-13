@@ -27,27 +27,13 @@ cd rust
 cargo test
 ```
 
-Build the Android Rust library **before launching the app**. The native `.so` library is generated locally and is not included in source control.
+Run Flutter tests and app:
 
 ```powershell
-# From the repository root (CharpCut)
-.\\scripts\\build-android-lib.ps1
-
-cd apps\\mobile
+cd ..\apps\mobile
 flutter test
-flutter clean
-flutter pub get
 flutter run
 ```
-
-The build script detects the Android SDK/NDK from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `android/local.properties`, or the default Windows SDK folder. If it cannot find the NDK, install **NDK (Side by side)** in Android Studio > SDK Manager > SDK Tools. You can also set `ANDROID_NDK_HOME` to a specific NDK folder.
-
-The script should create these files under `apps/mobile/android/app/src/main/jniLibs/`:
-- `arm64-v8a/libcharpcut_editor_api.so`
-- `armeabi-v7a/libcharpcut_editor_api.so`
-- `x86_64/libcharpcut_editor_api.so`
-
-If the app still reports the library missing, verify the `.so` exists for your device architecture, then rebuild and reinstall the app.
 
 ## UI refresh (CapCut-style mobile layout)
 The Flutter UI in `apps/mobile/lib` was restyled to a CapCut-style mobile editor:
@@ -68,3 +54,8 @@ undoing clips works. See `docs/bridge-integration.md` and `docs/roadmap.md`.
 - Real media import, video decoding, thumbnails, playback, or export.
 - Full Flutter editor-to-Rust command wiring.
 - GPU renderer.
+
+
+## Feature development roadmap
+
+The phased feature plan is maintained in [`docs/FEATURE_ROADMAP.md`](docs/FEATURE_ROADMAP.md). It includes phase goals, checklists, likely code locations, acceptance criteria, and suggested implementation updates.
