@@ -42,9 +42,8 @@ Verified by the project owner on 2026-10-13 (reported, not re-run by the assista
 Still open:
 
 - [ ] Verify save and open round-trip end to end (Rust tests cover it; no UI uses it until Phase 1)
-- [ ] Replace the manual library build with a Gradle hook so `flutter run` builds Rust automatically
 - [x] Render-engine decision approved: the first release is Android-only; iOS is a later, separate task (see [decisions/0001-render-engine.md](decisions/0001-render-engine.md))
-- [ ] Record known limitations in the README
+
 
 **Acceptance criteria:** Rust and Flutter tests pass; the app launches on Android without the startup-failure screen; a basic edit can be made, undone and redone on the device; a project exported with `export_project_json` and reopened with `open_project_json` matches the original.
 
