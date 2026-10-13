@@ -2,42 +2,60 @@
 
 This roadmap describes the recommended order for growing CharpCut from its current Flutter + Rust foundation into a practical mobile video editor. Treat each phase as a separate, testable milestone. Preserve existing working features and verify changes on an Android device before moving to the next phase.
 
-> **Status note:** This is a plan, not a claim that every feature is already implemented. Confirm completion by testing the feature in the actual app. The current project documentation identifies media import, real preview/playback, and real export as unfinished areas.
+> **This file is the single source of truth for feature planning and progress.** It is a plan, not a claim that every feature is implemented. Confirm completion by testing the real behaviour in the app.
 
-## Architecture at a glance
+## Status legend
 
-- **Flutter UI:** `apps/mobile/lib/` — screens, controls, timeline presentation, user interactions, and theme.
-- **Dart engine boundary:** `apps/mobile/lib/engine/` — engine interface, Rust adapter, and Dart state parsing.
-- **Flutter–Rust bridge:** `apps/mobile/lib/src/rust/`, `flutter_rust_bridge.yaml`, and generated bridge code — exposes Rust functions to Dart. Do not hand-edit generated files.
-- **Rust editing API/engine:** `rust/crates/editor_api/src/` — bridge-facing commands, authoritative editing state, edit operations, history, and state snapshots.
-- **Timeline data model:** `rust/crates/timeline/src/lib.rs` — project, media asset, track, clip, serialization, and timeline validation.
-- **Android packaging/build:** `apps/mobile/android/` and `scripts/build-android-lib.ps1` — Android configuration and native Rust library packaging.
-- **Tests:** `apps/mobile/test/` and Rust crate tests — validate UI behavior, state parsing, bridge integration, and editing rules.
+- `[x]` Completed and verified (code exists and a test or run confirmed it)
+- `[ ]` Planned or incomplete
+- `[!]` Blocked or needs investigation
+
+## Current phase
+
+**Phase 0 (foundation) is in progress.** The Rust engine, the bridge, and the Flutter wiring exist, and the 32 Rust tests pass. Not yet confirmed: the Flutter test suite on the latest code, the Android library build, and a run on a device. Phase 1 is partly done (engine routing, undo/redo) and the rest of it should wait for Phase 0 verification.
+
+Not implemented: media import, thumbnails, preview and playback, audio, text, effects, saving projects to disk from the UI, real export, sharing. The `+` button adds a 3-second placeholder clip (`placeholder://sample.mp4`).
+
+## Where things live
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layout. Short version: UI in `apps/mobile/lib/`, Dart engine boundary in `apps/mobile/lib/engine/`, generated bindings in `apps/mobile/lib/src/rust/` (do not edit), engine in `rust/crates/editor_api/src/`, project model in `rust/crates/timeline/src/lib.rs`, Android packaging in `apps/mobile/android/` and `scripts/build-android-lib.ps1`, tests in `apps/mobile/test/` and the Rust crates.
 
 ## Phase 0 — Foundation and Android stability
 
 **Goal:** Keep the app buildable and establish a reliable baseline before adding features.
 
-- [ ] Run `cargo test` from `rust/`.
-- [ ] Run `flutter test` from `apps/mobile/`.
-- [ ] Build the Rust shared library for the target Android ABI(s).
-- [ ] Confirm the `.so` library is packaged in the APK and loads on a real device.
-- [ ] Verify create project, add clip, split, undo, redo, save, and open round-trip correctly.
-- [ ] Record known limitations and the chosen media/rendering architecture.
+Built so far:
 
-**Acceptance criteria:** Rust and Flutter tests pass; the app launches on Android; a basic edit can be made, undone/redone, saved, and restored.
+- [x] Rust project model with a versioned, validated JSON file format (`rust/crates/timeline`)
+- [x] Editing engine in Rust: empty project, add/split/trim/delete, undo/redo, save/open (`rust/crates/editor_api/src/engine.rs`)
+- [x] Bridge API built around the engine, bindings generated, no demo project (`api.rs`, `src/rust/`)
+- [x] Flutter editor reads its state from Rust through the `EditorEngine` interface; widget tests use an in-memory engine
+- [x] Render-engine decision written down and approved by the project owner on 2026-10-13: Android first, iOS later ([decisions/0001-render-engine.md](decisions/0001-render-engine.md))
+- [x] `cargo test` from `rust/` passes (13 timeline + 19 engine tests; run during the documentation cleanup)
+
+Verification still open:
+
+- [ ] Run `flutter test` from `apps/mobile/` and confirm it passes on the latest code (an earlier run failed with two layout overflows in the timeline's left cluster; a fix was made but not yet re-run)
+- [!] Build the Rust shared library for the target Android ABI(s) with `scripts/build-android-lib.ps1` (needs the NDK and `ANDROID_NDK_HOME`; the script has not been confirmed to work, and a device run reported `libcharpcut_editor_api.so not found` before it was built)
+- [ ] Confirm the `.so` is packaged in the APK and `RustLib.init()` loads it on a real device
+- [ ] Verify create project, add clip, split, undo, redo round-trip on a device; save and open round-trip is covered by Rust tests only (no UI for it yet)
+- [ ] Replace the manual library build with a Gradle hook so `flutter run` builds Rust automatically
+- [x] Render-engine decision approved: the first release is Android-only; iOS is a later, separate task (see [decisions/0001-render-engine.md](decisions/0001-render-engine.md))
+- [ ] Record known limitations in the README once the above is verified
+
+**Acceptance criteria:** Rust and Flutter tests pass; the app launches on Android without the startup-failure screen; a basic edit can be made, undone and redone on the device; a project exported with `export_project_json` and reopened with `open_project_json` matches the original.
 
 ## Phase 1 — Engine integration and project persistence
 
 **Goal:** Ensure editing commands use one authoritative project state.
 
-- [ ] Route every editing control through `EditorEngine` and the Rust API.
-- [ ] Remove duplicate/mock timeline state from production flows where applicable.
-- [ ] Complete undo/redo for every supported edit operation.
-- [ ] Save and reopen versioned project JSON.
+- [ ] Route every editing control through `EditorEngine` and the Rust API. (Partial: add, select, split, trim, delete, undo and redo are routed. The Mute toggle and the playhead are local UI state; `move_clip` exists in the timeline crate but is not exposed by the engine or bridge.)
+- [ ] Remove duplicate/mock timeline state from production flows where applicable. (The placeholder clip added by `+` is the remaining mock.)
+- [ ] Complete undo/redo for every supported edit operation. (Done for the current operations; extend it as new ones are added.)
+- [ ] Save and reopen versioned project JSON. (Partial: the Rust API and `EditorEngine` methods exist and are tested in Rust; nothing writes or reads a file from the UI.)
 - [ ] Add autosave and draft recovery.
-- [ ] Add useful validation and user-facing errors for failed operations.
-- [ ] Add engine and bridge integration tests.
+- [ ] Add useful validation and user-facing errors for failed operations. (Partial: refused edits set `last_error` and the editor shows it.)
+- [ ] Add engine and bridge integration tests. (Partial: engine unit tests and a snapshot-parsing test exist; no test calls the real bridge.)
 
 **Likely locations:** `editor_screen.dart`, `engine/editor_engine.dart`, `engine/rust_engine.dart`, `engine/editor_state.dart`, `rust/crates/editor_api/`, and `rust/crates/timeline/`.
 
@@ -63,7 +81,7 @@ This roadmap describes the recommended order for growing CharpCut from its curre
 
 **Goal:** Display and play the actual source media in timeline order.
 
-- [ ] Choose and document the media decoding and rendering architecture before building advanced effects.
+- [ ] Choose and document the media decoding and rendering architecture before building advanced effects. (Approved in [decisions/0001-render-engine.md](decisions/0001-render-engine.md): Rust edit list plus Android Media3; not yet implemented.)
 - [ ] Implement play/pause and accurate seeking.
 - [ ] Render the clip at the current playhead position.
 - [ ] Synchronize audio and video.
@@ -129,7 +147,7 @@ This roadmap describes the recommended order for growing CharpCut from its curre
 - [ ] Handle insufficient storage, unsupported codecs, and export failures.
 - [ ] Validate output duration, playback, and audio/video synchronization.
 
-**Architecture decision:** If using FFmpeg or another third-party media engine, review Android build support, codec availability, distribution/licensing obligations, and compatibility with the Rust architecture before committing.
+**Architecture decision:** See [decisions/0001-render-engine.md](decisions/0001-render-engine.md), which proposes platform media stacks and rejects FFmpeg for now. If using FFmpeg or another third-party media engine, review Android build support, codec availability, distribution/licensing obligations, and compatibility with the Rust architecture before committing.
 
 **Acceptance criteria:** An exported file exists, plays in a standard player, includes all supported timeline edits, and has synchronized audio/video.
 
@@ -147,7 +165,18 @@ This roadmap describes the recommended order for growing CharpCut from its curre
 
 AI features such as background removal, automatic captions, and beat detection should be separately scoped because they may require models, significant device resources, or network services.
 
+## Phase dependencies and risks
+
+- Phase 0 verification gates everything: features cannot be tested on a device until the Rust library loads there.
+- Phase 3 (preview) and Phase 7 (export) depend on the render-engine decision. The decision proposes Android first through Media3, with Rust producing an edit list the renderer consumes; iOS roughly doubles both phases.
+- Phase 2 (import) must come before Phase 3 and Phase 7: previewing and exporting need real media paths, not the placeholder clip.
+- Phase 4 properties (scale, rotation, opacity, volume, speed) and the Phase 5 and Phase 6 features need new fields in the project format, so bump `SCHEMA_VERSION` and add migrations.
+- Phase 5 and Phase 6 effects need both a preview and an export implementation (see the implementation note in Phase 5).
+- Risks: native build setup on Windows (NDK, `cargo-ndk`), Android storage permissions and moved files, audio/video sync, and memory use with long projects.
+
 ## Suggested implementation updates
+
+Each update corresponds roughly to the phases above. None is complete except the foundation parts of Update 01 listed in Phase 0.
 
 | Update | Scope | Completion check |
 |---|---|---|
@@ -163,6 +192,10 @@ AI features such as background removal, automatic captions, and beat detection s
 | 10 | Export engine | A valid video file can be exported and played |
 | 11 | Advanced effects | Selected advanced features pass tests |
 | 12 | Performance and release | Stress tests pass and release build is stable |
+
+## Note on phase numbering
+
+An earlier, shorter roadmap used different numbers (its Phase 1 media import and drafts = Phase 2 here; its Phase 2 preview = Phase 3; its Phase 3 core editing = Phase 4; its Phase 4 export = Phase 7; its Phase 5 audio and text = Phases 5 and 6; its Phase 6 effects = Phase 5; its Phase 7 photo editing and release = Phase 8). This file's numbering is the one to use. Photo editing (the "Edit photo" entry on the home screen) is not covered by any phase above and needs a decision on scope.
 
 ## Development rules for every update
 

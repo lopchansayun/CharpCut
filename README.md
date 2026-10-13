@@ -1,61 +1,60 @@
-# CharpCut — Update 02: Rust Editor API + Bridge Setup
+# CharpCut
 
-This update builds on the supplied project while preserving its latest home/editor UI and Rust timeline implementation.
+A free mobile video editor. The UI is built with Flutter and the editing engine (project model, edits, undo/redo, saved-file format) is written in Rust.
 
-## Added
-- `charpcut-editor-api` Rust crate wrapping the timeline model in a bridge-facing API.
-- Canonical in-process Rust editor state protected by a mutex.
-- `flutter_rust_bridge` 2.13.0 dependency and code-generation config.
-- Windows PowerShell setup script for generating the bridge.
-- Updated architecture and roadmap.
+CharpCut aims to be a practical editor with no paywall: import clips, edit them on a timeline, preview, and export a real video file. Most of that is still planned; see [Current status](#current-status).
 
-## Setup
+## Tech stack
 
-Requirements: current stable Flutter/Dart compatible with `flutter_rust_bridge` 2.13.0 (Dart SDK >= 3.9), Rust via rustup, and Android Studio/Android SDK.
+Verified against the repository files:
+
+| Part | Technology |
+| --- | --- |
+| Mobile UI | Flutter, Dart SDK `>=3.9.0 <4.0.0` (`apps/mobile/pubspec.yaml`), Material 3 |
+| Editing engine | Rust, edition 2021, Cargo workspace in `rust/` (crates `charpcut-timeline`, `charpcut-editor-api`) |
+| Bridge | `flutter_rust_bridge` 2.13.0 (Dart package and Rust crate; code generator installed by `scripts/setup-bridge.ps1`) |
+| Android native build | `cargo-ndk` and the Android NDK, via `scripts/build-android-lib.ps1` |
+
+## Prerequisites
+
+- Flutter (stable) with Dart 3.9 or newer
+- Rust via [rustup](https://rustup.rs)
+- Android Studio with the Android SDK and the NDK (SDK Manager > SDK Tools > NDK). Set `ANDROID_NDK_HOME` to the NDK folder.
+- A real Android device or emulator
+- Windows PowerShell for the helper scripts in `scripts/` (they are `.ps1` files; on other systems run the equivalent commands inside them by hand)
+
+## Setup and run
 
 From the repository root:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\setup-bridge.ps1
-```
-
-Then run Rust tests:
-
-```powershell
+# 1. Run the Rust tests
 cd rust
 cargo test
-```
 
-Run Flutter tests and app:
+# 2. Build the Rust library for Android (needed once, and after every change under rust/)
+cd ..
+.\scripts\build-android-lib.ps1
 
-```powershell
-cd ..\apps\mobile
+# 3. Run the Flutter tests and the app
+cd apps\mobile
+flutter pub get
 flutter test
 flutter run
 ```
 
-## UI refresh (CapCut-style mobile layout)
-The Flutter UI in `apps/mobile/lib` was restyled to a CapCut-style mobile editor:
-- `home_screen.dart` - light home with hero banner, New video / Edit photo cards, recent drafts, tool grid, bottom nav.
-- `editor_screen.dart` - dark editor with preview, transport row, scrolling timeline with a fixed playhead, and a toolbar that switches to clip tools when a clip is selected.
-- `export_panel.dart` - quality pill dropdown (resolution, frame rate, bitrate, estimated size).
-- `export_done_screen.dart` - export-complete screen with share targets and quick actions.
+If `libcharpcut_editor_api.so` was not built, the app opens a "CharpCut could not start" screen instead of the editor. Build the library (step 2) and run again.
 
-Still placeholders: media import/preview, real export, and sharing. Unfinished controls show a short "coming soon" message. The export flow only plays the screens and does not write a file yet.
+Only when `rust/crates/editor_api/src/api.rs` changes, regenerate the bridge bindings with `.\scripts\setup-bridge.ps1` (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#regenerating-the-bindings)). `.\scripts\check-rust.ps1` runs `cargo test` for the Rust workspace.
 
-## Phase 0 status
-The editor now runs on the Rust engine: Flutter asks Rust for every change and shows the state it returns.
-Rust tests pass (`cargo test`: 13 timeline + 19 engine). The Flutter side has not been compiled or run by the
-author of this change. Run `flutter test`; then `scripts\build-android-lib.ps1` (builds the Rust library for Android) and `flutter run`, and check that adding, splitting and
-undoing clips works. See `docs/bridge-integration.md` and `docs/roadmap.md`.
+## Current status
 
-## What's still not included
-- Real media import, video decoding, thumbnails, playback, or export.
-- Full Flutter editor-to-Rust command wiring.
-- GPU renderer.
+- Working: home screen, editor screen, export settings panel and export-complete screen (UI). The editor starts empty and every edit (add, select, split, trim, delete, undo, redo) goes through the Rust engine.
+- Placeholders: media import (the add button inserts a 3-second placeholder clip), real preview and playback, thumbnails, audio and text tools, effects, saving projects to disk, real export and sharing. The export flow only plays the screens; it writes no file.
+- Verified by running `cargo test` in `rust/` (19 engine tests and 13 timeline tests pass). The Flutter tests and the Android build and device run have not been confirmed in this documentation pass; see Phase 0 in the roadmap.
 
+## Documentation
 
-## Feature development roadmap
-
-The phased feature plan is maintained in [`docs/FEATURE_ROADMAP.md`](docs/FEATURE_ROADMAP.md). It includes phase goals, checklists, likely code locations, acceptance criteria, and suggested implementation updates.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the app is structured, the Flutter-Rust bridge, testing, and where to add code
+- [docs/FEATURE_ROADMAP.md](docs/FEATURE_ROADMAP.md) - phased feature plan and progress (single source of truth)
+- [docs/decisions/0001-render-engine.md](docs/decisions/0001-render-engine.md) - preview and export engine decision (approved: Android first, iOS later)
