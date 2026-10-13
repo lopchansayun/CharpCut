@@ -43,6 +43,9 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
 
   final ScrollController _scroll = ScrollController();
   int _previewSeekSerial = 0;
+  bool _fullScreen = false;
+  bool _landscapePreview = false;
+  final _previewKey = GlobalKey();
   bool _playing = false;
   bool _syncingScroll = false;
   bool _importing = false;
@@ -80,6 +83,7 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
+    if (_fullScreen || _landscapePreview) _restoreSystemUi();
     super.dispose();
   }
 
@@ -107,6 +111,7 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
 
   // Coalesce drag/player updates while keeping Rust's playhead authoritative.
   void _requestSeek(int ms, {bool fromPlayback = false}) {
+    if (!fromPlayback) _pause();
     _pendingSeek = ms;
     _pendingSeekFromPlayback = fromPlayback;
     _seekFuture ??= _drainSeeks();
@@ -196,6 +201,8 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
   /// Runs an engine call, shows the result, and reports a refused edit.
   Future<void> _run(Future<EditorState> Function() call, {bool announce = true}) async {
     _pause();
+    await _seekFuture;
+    if (!mounted) return;
     final EditorState next;
     try {
       next = await call();
@@ -382,6 +389,72 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _restoreSystemUi() async {
+    await SystemChrome.setPreferredOrientations([]);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  Future<void> _setFullScreen(bool value) async {
+    setState(() { _fullScreen = value; });
+    if (value) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      _landscapePreview = false;
+      await _restoreSystemUi();
+      if (mounted) _syncScrollToEngine();
+    }
+  }
+
+  Future<void> _rotatePreview() async {
+    _landscapePreview = !_landscapePreview;
+    await SystemChrome.setPreferredOrientations(_landscapePreview
+        ? [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
+        : [DeviceOrientation.portraitUp]);
+  }
+
+  void _stepPreview(int direction) {
+    final fps = _state.projectFps > 0 ? _state.projectFps : 30.0;
+    final target = (_state.playheadMs + direction * math.max(1, (1000 / fps).round()))
+        .clamp(0, _state.totalDurationMs).toInt();
+    _run(() => _engine.seek(target), announce: false);
+  }
+
+  Widget _fullScreenHeader() => SizedBox(height: 48, child: Row(children: [
+    IconButton(tooltip: 'Exit fullscreen', onPressed: () => _setFullScreen(false),
+      icon: const Icon(Icons.fullscreen_exit)),
+    const Expanded(child: Text('Preview')),
+    IconButton(tooltip: 'Rotate preview', onPressed: _rotatePreview, icon: const Icon(Icons.screen_rotation)),
+  ]));
+
+  Widget _fullScreenTransport() => SizedBox(height: 48, child: Row(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      IconButton(tooltip: 'Back 5 seconds', onPressed: () => _seekAfterLayout((_playhead - 5).clamp(0, _totalSeconds).toDouble()),
+          icon: const Icon(Icons.replay_5)),
+      IconButton(tooltip: 'Previous project frame', onPressed: () => _stepPreview(-1), icon: const Icon(Icons.skip_previous)),
+      IconButton(tooltip: _playing ? 'Pause' : 'Play', onPressed: _clips.isEmpty ? null : _togglePlay,
+          iconSize: 36, icon: Icon(_playing ? Icons.pause : Icons.play_arrow)),
+      IconButton(tooltip: 'Next project frame', onPressed: () => _stepPreview(1), icon: const Icon(Icons.skip_next)),
+      IconButton(tooltip: 'Forward 5 seconds', onPressed: () => _seekAfterLayout((_playhead + 5).clamp(0, _totalSeconds).toDouble()),
+          icon: const Icon(Icons.forward_5)),
+      IconButton(tooltip: _state.mainTrackMuted ? 'Unmute' : 'Mute',
+        onPressed: () => _run(() => _engine.setMuted(!_state.mainTrackMuted)),
+        icon: Icon(_state.mainTrackMuted ? Icons.volume_off : Icons.volume_up)),
+    ],
+  ));
+
+  Widget _fullScreenScrubber() => Padding(
+    padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.paddingOf(context).bottom + 8),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Slider(value: _state.playheadMs.clamp(0, _state.totalDurationMs).toDouble(),
+        min: 0, max: math.max(1, _state.totalDurationMs).toDouble(),
+        onChanged: _state.totalDurationMs == 0 ? null : (value) => _requestSeek(value.round())),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(formatClock(_playhead)), Text(formatClock(_totalSeconds)),
+      ]),
+    ]),
+  );
+
   // -------------------------------------------------------------------------
   // Build
   // -------------------------------------------------------------------------
@@ -390,7 +463,12 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final selected = _selected;
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    return PopScope(
+      canPop: !_fullScreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _fullScreen) _setFullScreen(false);
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: editorBg,
@@ -399,12 +477,12 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
             Column(
               children: [
                 SizedBox(height: media.padding.top),
-                _topBar(),
+                _fullScreen ? _fullScreenHeader() : _topBar(),
                 Expanded(child: _preview(selected != null)),
-                _controls(selected != null),
-                _timeline(),
-                const SizedBox(height: 6),
-                _toolbar(selected != null),
+                _fullScreen ? _fullScreenTransport() : _controls(selected != null),
+                _fullScreen ? _fullScreenScrubber() : _timeline(),
+                SizedBox(height: _fullScreen ? 0 : 6),
+                _fullScreen ? const SizedBox.shrink() : _toolbar(selected != null),
               ],
             ),
             if (_exportOpen)
@@ -420,7 +498,7 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
           ],
         ),
       ),
-    );
+    ));
   }
 
   // --- Top bar --------------------------------------------------------------
@@ -474,46 +552,23 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
 
   // --- Preview --------------------------------------------------------------
 
-  Widget _preview(bool clipSelected) {
-    final clip = _clipAt(_playhead);
-    return LayoutBuilder(
-      builder: (context, box) {
-        final pw = math.min(box.maxWidth, box.maxHeight * 4 / 3);
-        return Center(
-          child: Container(
-            width: pw,
-            height: pw * 3 / 4,
-            foregroundDecoration: clipSelected
-                ? BoxDecoration(border: Border.all(color: selectionTeal, width: 2))
-                : null,
-            color: Colors.black,
-            child: Stack(fit: StackFit.expand, children: [clip == null
-                  ? const Center(child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.video_library_outlined, size: 34, color: Colors.white38),
-                        SizedBox(height: 10),
-                        Text('Tap + to add a clip', style: TextStyle(fontSize: 13, color: Colors.white54)),
-                      ],
-                    ))
-                  : !EngineScope.previewEnabledOf(context)
-                      ? Center(child: Text(clip.name))
-                      : VideoPreview(
-                          state: _state,
-                          playing: _playing,
-                          seekSerial: _previewSeekSerial,
-                          onPosition: _onPreviewPosition,
-                          onError: _onPreviewError,
-                        ),
-              if (_mediaWarning != null) Align(alignment: Alignment.topCenter,
-                child: Container(color: Colors.black87, padding: const EdgeInsets.all(8),
-                  child: Text(_mediaWarning!, style: const TextStyle(color: Colors.amber, fontSize: 12)))),
-            ]),
-          ),
-        );
-      },
-    );
-  }
+  Widget _preview(bool clipSelected) => DecoratedBox(
+    position: DecorationPosition.foreground,
+    decoration: BoxDecoration(border: clipSelected && !_fullScreen
+        ? Border.all(color: selectionTeal, width: 2) : null),
+    child: ColoredBox(color: Colors.black, child: Stack(fit: StackFit.expand, children: [
+      if (_clips.isEmpty)
+        const Center(child: Text('Tap + to add a clip', style: TextStyle(color: Colors.white54)))
+      else if (!EngineScope.previewEnabledOf(context))
+        Center(child: Text(_clipAt(_playhead)?.name ?? ''))
+      else
+        VideoPreview(key: _previewKey, state: _state, playing: _playing,
+          seekSerial: _previewSeekSerial, onPosition: _onPreviewPosition, onError: _onPreviewError),
+      if (_mediaWarning != null) Align(alignment: Alignment.topCenter,
+        child: Container(color: Colors.black87, padding: const EdgeInsets.all(8),
+          child: Text(_mediaWarning!, style: const TextStyle(color: Colors.amber, fontSize: 12)))),
+    ])),
+  );
 
   // --- Transport row --------------------------------------------------------
 
@@ -529,7 +584,7 @@ class _EditorHomeState extends State<EditorHome> with WidgetsBindingObserver {
               child: IconButton(
                 tooltip: 'Fullscreen',
                 icon: const Icon(Icons.fullscreen_rounded, size: 28),
-                onPressed: () => _message('Fullscreen preview is planned'),
+                onPressed: () => _setFullScreen(true),
               ),
             ),
           ),

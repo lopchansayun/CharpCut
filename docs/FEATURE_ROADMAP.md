@@ -1,99 +1,52 @@
-# CharpCut — Feature Development Roadmap
+# CharpCut feature roadmap
 
-This roadmap describes the recommended order for growing CharpCut from its current Flutter + Rust foundation into a practical mobile video editor. Treat each phase as a separate, testable milestone. Preserve existing working features and verify changes on an Android device before moving to the next phase.
+This is the single source of truth for feature planning. `[x]` means the feature is implemented and accepted in the owner's Android testing; `[ ]` means work or targeted verification remains. The owner reported that the Phase 1–3 app flows work. The assistant did not rerun the recent Android builds or tests.
 
-> **This file is the single source of truth for feature planning and progress.** It is a plan, not a claim that every feature is implemented. Confirm completion by testing the real behaviour in the app.
+## Current status
 
-## Status legend
-
-- `[x]` Completed and verified (code exists and a test or run confirmed it)
-- `[ ]` Planned or incomplete
-- `[!]` Blocked or needs investigation
-
-## Current phase
-
-**Phase 1 is complete, verified by the project owner.** The owner confirmed that all Phase 1 behavior works, including persistence and multiple drafts. This is user-reported Android verification; the assistant did not rerun the app or tests.
-
-**Phase 2 implementation is now in place and awaits owner acceptance.** New code adds video/audio/image imports, a persisted media library, metadata, thumbnails/filmstrips, project duplication, and missing-media reporting. See [PHASE2_MEDIA.md](PHASE2_MEDIA.md) for changes, limits, and manual acceptance steps. No build, analyzer, app run, or test execution was performed for this update, following the owner's instruction.
-
-Audio/image timeline placement, text/effects, advanced preview controls, export and sharing remain later phases. The initial Android preview exists; fuller Phase 3 behavior is still incomplete.
-
-## Where things live
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layout. Short version: UI in `apps/mobile/lib/`, Dart engine boundary in `apps/mobile/lib/engine/`, generated bindings in `apps/mobile/lib/src/rust/` (do not edit), engine in `rust/crates/editor_api/src/`, project model in `rust/crates/timeline/src/lib.rs`, Android packaging in `apps/mobile/android/` and `scripts/build-android-lib.ps1`, tests in `apps/mobile/test/` and the Rust crates.
+- **Phase 1: complete.** Rust-driven editing, undo/redo, autosave and project persistence work on the owner's device.
+- **Phase 2: complete.** Video/audio/image import, media metadata, thumbnails, library and project management work on the owner's device.
+- **Phase 3: interactive preview accepted.** The owner ran the app and confirmed playback, seeking, fullscreen and zoom/pan work. A gap fixture and decoder-failure paths still need targeted checks because normal editing does not produce gaps.
+- **Next: Phase 4.** Timeline editing needs more clip operations, precise controls, and audio/image/overlay tracks. Text, transitions, cover editing and real export remain later work.
 
 ## Phase 0 — Foundation and Android stability
 
-**Goal:** Keep the app buildable and establish a reliable baseline before adding features.
-
-Built so far:
-
-- [x] Rust project model with a versioned, validated JSON file format (`rust/crates/timeline`)
-- [x] Editing engine in Rust: empty project, add/split/trim/delete, undo/redo, save/open (`rust/crates/editor_api/src/engine.rs`)
-- [x] Bridge API built around the engine, bindings generated, no demo project (`api.rs`, `src/rust/`)
-- [x] Flutter editor reads its state from Rust through the `EditorEngine` interface; widget tests use an in-memory engine
-- [x] Render-engine decision written down and approved by the project owner on 2026-10-13: Android first, iOS later ([decisions/0001-render-engine.md](decisions/0001-render-engine.md))
-- [x] `cargo test` from `rust/` passes (13 timeline + 19 engine tests; run during the documentation cleanup)
-
-Verified by the project owner on 2026-10-13 (reported, not re-run by the assistant):
-
-- [x] `flutter test` from `apps/mobile/` passes
-- [x] `scripts/build-android-lib.ps1` builds the Rust shared library without errors
-- [x] The library loads on a real device (no startup-failure screen) and add clip, trim, split, undo and redo work through Rust
-
-Still open:
-
-- [x] Verify save and open round-trip on Android after app restart (confirmed by the project owner with the Phase 1 acceptance report).
-- [x] Render-engine decision approved: the first release is Android-only; iOS is a later, separate task (see [decisions/0001-render-engine.md](decisions/0001-render-engine.md))
-
-
-**Acceptance criteria:** Rust and Flutter tests pass; the app launches on Android without the startup-failure screen; a basic edit can be made, undone and redone on the device; a project exported with `export_project_json` and reopened with `open_project_json` matches the original.
+- [x] Versioned Rust project model and validated JSON save/open.
+- [x] Rust editing engine and generated Flutter bridge load on Android.
+- [x] Android-first Media3 decision recorded in [0001-render-engine.md](decisions/0001-render-engine.md).
+- [x] App launches and basic edits work on the owner's device.
+- [ ] Automate the Rust Android library build in Gradle; for now use `scripts/build-android-lib.ps1` after Rust changes.
 
 ## Phase 1 — Engine integration and project persistence
 
-**Goal:** Ensure editing commands use one authoritative project state.
-
-- [x] Route every supported editing control through `EditorEngine` and Rust, including Mute, playhead and clip Move. Seeking is transient session state; mute and reorder are saved edits.
-- [x] Remove duplicate/mock timeline state from production flows. The add button uses Android's system video picker and measured duration. Real filmstrip code has now been added in Phase 2 and awaits manual acceptance.
-- [x] Complete undo/redo for all supported edits, including mute and reorder. No-op controls and seek preserve history and redo; failed operations restore the previous project.
-- [x] Save/reopen versioned project JSON; schema 2 persists mute and migrates schema 1. Initial persistence confirmed working by the owner; extended real bridge tests cover mute and reordered clips.
-- [x] Add autosave and draft recovery. Successful edits including mute/reorder and undo/redo are saved. Initial features confirmed working by the owner; the owner subsequently confirmed all Phase 1 checks passed.
-- [x] Add validation and user-facing errors for refused edits, corrupt/newer files, storage failures, picker failures and invalid video metadata. Rust validates the project after every successful mutation.
-- [x] Add engine and bridge integration tests. (Rust engine tests, Flutter session/storage/widget tests, and `test/rust_bridge_test.dart` calling the actual native Rust bridge. Run `cargo build -p charpcut-editor-api` before Flutter tests to enable the desktop bridge test.)
-
-**Likely locations:** `editor_screen.dart`, `engine/editor_engine.dart`, `engine/rust_engine.dart`, `engine/editor_state.dart`, `rust/crates/editor_api/`, and `rust/crates/timeline/`.
-
-**Acceptance criteria:** UI state consistently matches Rust state; edits survive app restart; undo/redo is reliable. The owner confirmed all Phase 1 checks passed, including the previously requested restart and edit checks.
+- [x] Route supported controls through Rust: add, select, seek, split, trim, delete, mute, reorder, undo and redo.
+- [x] Keep one authoritative state, with playhead/selection transient and saved edits undoable.
+- [x] Save/reopen schema 2 project JSON; migrate schema 1 and reject corrupt/newer files.
+- [x] Autosave, multiple independent drafts, recovery, and visible storage errors.
+- [x] Owner-confirmed edit, reopen, restart and history flows on Android.
 
 ## Phase 2 — Media import and project management
 
-**Goal:** Let users bring their own media into projects.
+- [x] Import video, audio and still images through Android's document picker into app-private storage.
+- [x] Inspect available duration, dimensions, orientation, frame rate, audio streams and file details.
+- [x] Show a searchable, filtered media library; reuse an imported video in another project.
+- [x] Generate thumbnail previews and filmstrip tiles from imported video ranges.
+- [x] Create, rename, duplicate, delete and resume drafts from Home and Projects.
+- [x] Report missing, inaccessible and unsupported media. Private imports remain usable when the external original moves.
 
-- [ ] Import video from Android's system picker. (Expanded media-import implementation added; acceptance pending.)
-- [ ] Import audio and still images. (Implemented into the reusable library; audio/image timeline tracks remain Phase 4.)
-- [ ] Handle file permissions and persist access safely or copy media into app-managed storage when needed. (All three media types are copied into private storage.)
-- [ ] Read duration, dimensions, orientation, frame rate, and audio-stream metadata. (Implemented; unavailable metadata is labeled, average frame-rate fallback is identified.)
-- [ ] Generate thumbnails and video filmstrips. (Implemented with a bounded disk cache and visible timeline tiles.)
-- [ ] Show imported media in a media library. (Implemented with type filters, search, details and video reuse.)
-- [ ] Create, rename, duplicate, and delete projects. (Create/rename/delete confirmed by the owner; independent duplication now implemented, pending acceptance.)
-- [x] Display recent drafts on the home screen. (Owner verified drafts; newly added first-frame thumbnails await Phase 2 acceptance.)
-- [ ] Handle moved, deleted, unsupported, or inaccessible source files. (Private copies survive external moves; import validation, unavailable library entries, and editor source warnings implemented. Automatic relinking is not included.)
-
-**Acceptance criteria:** A user can import media, see its metadata and thumbnail, add it to a project, and reopen the project later.
+Audio and image files are library assets in this phase. Adding them to editable tracks belongs to Phases 4 and 6. Imported source cleanup and automatic relinking remain future reliability work.
 
 ## Phase 3 — Real preview and playback
 
-**Goal:** Display and play the actual source media in timeline order.
+- [x] Use the approved Android Media3 renderer with source ranges supplied from the validated Rust snapshot.
+- [x] Play/pause, seek, scrub, frame-time steps and five-second skips in one player.
+- [x] Preview consecutive clips, source audio, mute, trim/split/reorder edits and the playhead position.
+- [x] Support fullscreen, orientation requests, source/project fit and viewing-only zoom/pan/reset.
+- [x] Display buffering and decoder errors, explicit retry, and pause/release on lifecycle and audio interruptions.
+- [x] Implement black/silent playback for leading, intermediate and trailing gaps in a loaded timeline.
+- [ ] Exercise gap playback with a valid fixture and decoder-failure recovery on a device; the normal editor packs clips without gaps.
 
-- [ ] Choose and document the media decoding and rendering architecture before building advanced effects. (Approved: Android Media3. Initial preview consumes source ranges from Rust's validated snapshot; a separate Rust renderer edit-list API remains future work.)
-- [ ] Implement play/pause and accurate seeking. (Code added in the preview fix; intentionally not built or tested, per owner request.)
-- [ ] Render the clip at the current playhead position. (Media3 platform-view code replaces the filename-only preview; manual verification pending.)
-- [ ] Synchronize audio and video. (Native player renders source audio and video together; manual verification pending.)
-- [ ] Handle gaps, black frames, orientation, aspect ratios, and portrait/landscape projects.
-- [ ] Support multiple consecutive clips and transitions in preview. (Clipped playlist code added; transitions remain planned and playlist behavior awaits manual verification.)
-- [ ] Handle buffering, decoding errors, and resource cleanup. (Code added for buffering, errors, background pause and view-disposal cleanup; manual verification pending.)
-
-**Acceptance criteria:** Preview playback reflects the timeline edits and remains synchronized during seeking and playback.
+Consecutive clips currently use hard cuts. Fade and crossfade authoring/rendering belong to Phase 5. Viewing zoom does not save a crop or scale edit; that belongs to Phase 4. A dedicated Rust renderer edit list and shared preview/export interface remain planned before the composition/export pipeline grows.
 
 ## Phase 4 — Essential timeline editing
 
@@ -169,48 +122,14 @@ Still open:
 
 AI features such as background removal, automatic captions, and beat detection should be separately scoped because they may require models, significant device resources, or network services.
 
-## Phase dependencies and risks
+## Dependencies and implementation rules
 
-- Phase 0 verification (done) gated everything: the Rust library now loads on a device.
-- Phase 3 (preview) and Phase 7 (export) depend on the render-engine decision. The decision proposes Android first through Media3, with Rust producing an edit list the renderer consumes; iOS roughly doubles both phases.
-- Phase 2 (import) must come before Phase 3 and Phase 7: previewing and exporting need real media paths, not the placeholder clip.
-- Phase 4 properties (scale, rotation, opacity, volume, speed) and the Phase 5 and Phase 6 features need new fields in the project format, so bump `SCHEMA_VERSION` and add migrations.
-- Phase 5 and Phase 6 effects need both a preview and an export implementation (see the implementation note in Phase 5).
-- Risks: native build setup on Windows (NDK, `cargo-ndk`), Android storage permissions and moved files, audio/video sync, and memory use with long projects.
-
-## Suggested implementation updates
-
-Each update corresponds roughly to the phases above. Phase 1 is owner-verified; the Phase 2 additions await manual acceptance.
-
-| Update | Scope | Completion check |
-|---|---|---|
-| 01 | Android/native build and engine baseline | App launches and Rust bridge calls work on a device |
-| 02 | Engine integration, undo/redo, project persistence | Edits save, reopen, undo, and redo correctly |
-| 03 | Media import and metadata | Video/audio/image files can be imported and inspected |
-| 04 | Thumbnails and media library | Imported media has usable thumbnails and appears in the library |
-| 05 | Preview and playback | Actual media plays and seeking works |
-| 06 | Timeline editing improvements | Edits affect playback and survive save/reopen |
-| 07 | Multiple tracks and clip properties | Layered timeline edits work correctly |
-| 08 | Text, transitions, and filters | Supported effects appear in preview |
-| 09 | Audio tools | Multiple audio sources play in sync |
-| 10 | Export engine | A valid video file can be exported and played |
-| 11 | Advanced effects | Selected advanced features pass tests |
-| 12 | Performance and release | Stress tests pass and release build is stable |
-
-## Note on phase numbering
-
-An earlier, shorter roadmap used different numbers (its Phase 1 media import and drafts = Phase 2 here; its Phase 2 preview = Phase 3; its Phase 3 core editing = Phase 4; its Phase 4 export = Phase 7; its Phase 5 audio and text = Phases 5 and 6; its Phase 6 effects = Phase 5; its Phase 7 photo editing and release = Phase 8). This file's numbering is the one to use. Photo editing (the "Edit photo" entry on the home screen) is not covered by any phase above and needs a decision on scope.
-
-## Development rules for every update
-
-1. Preserve existing working UI and behavior unless a change is explicitly part of the task.
-2. Keep Flutter responsible for presentation and interaction; keep core editing rules and authoritative project state in Rust.
-3. Do not edit generated bridge files manually. Change the Rust API and regenerate bindings.
-4. Add Rust unit tests and Flutter tests for new behavior.
-5. Build and test on Android after native code, bridge, or packaging changes.
-6. Do not mark a feature complete because its button or mock UI exists; test the real behavior.
-7. Each update should include a changelog, changed-file list, build/test commands, and any known limitations.
+- Phases 4–6 need new saved project fields. Bump `SCHEMA_VERSION`, add migrations, update the Rust API, and regenerate bridge bindings when it changes.
+- Effects and audio edits need both preview and export support. A UI control or stored parameter alone does not complete a feature.
+- Android is the first release target; iOS requires a separate AVFoundation implementation. The approved design is in [0001-render-engine.md](decisions/0001-render-engine.md).
+- Keep Rust responsible for editing rules and Flutter responsible for presentation. Do not edit generated bindings by hand.
+- Verify new behavior on Android. The project owner currently runs device and test checks manually.
 
 ## Recommended next step
 
-Manually verify **Phase 2 media import and project management** using [PHASE2_MEDIA.md](PHASE2_MEDIA.md). Phase 1 is confirmed complete. After Phase 2 acceptance, continue with Phase 3 preview behavior.
+Start Phase 4 timeline editing while retaining the accepted Phase 1–3 flows. Also run targeted gap/error preview checks when suitable fixtures are available.

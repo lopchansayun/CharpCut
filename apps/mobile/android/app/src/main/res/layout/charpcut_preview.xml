@@ -7,5 +7,5 @@
     app:surface_type="texture_view"
     app:resize_mode="fit"
     app:use_controller="false"
-    app:show_buffering="always"
+    app:show_buffering="never"
     app:keep_content_on_player_reset="false" />

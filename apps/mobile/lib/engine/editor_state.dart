@@ -32,6 +32,9 @@ class EditorClip {
 /// returns after every call; the UI never edits it directly.
 class EditorState {
   const EditorState({
+    this.projectWidth = 1080,
+    this.projectHeight = 1920,
+    this.projectFps = 30,
     this.mainTrackId = '',
     this.clips = const [],
     this.selectedClipId,
@@ -45,6 +48,11 @@ class EditorState {
   });
 
   static const empty = EditorState();
+
+  final int projectWidth;
+  final int projectHeight;
+  final double projectFps;
+  double get projectAspectRatio => projectHeight > 0 ? projectWidth / projectHeight : 9 / 16;
 
   final String mainTrackId;
   final List<EditorClip> clips;
@@ -78,7 +86,7 @@ class EditorState {
     for (final c in clips) {
       if (ms >= c.startMs && ms < c.endMs) return c;
     }
-    return clips.last;
+    return ms >= totalDurationMs ? clips.lastOrNull : null;
   }
 
   /// Reads the snapshot JSON from `EditorSnapshot` in the Rust `editor_api` crate.
@@ -119,7 +127,13 @@ class EditorState {
       }
     }
 
+    final settings = project['settings'] as Map<String, dynamic>? ?? const {};
+    final fpsNum = (settings['fps_num'] as num?)?.toDouble() ?? 30.0;
+    final fpsDen = (settings['fps_den'] as num?)?.toDouble() ?? 1.0;
     return EditorState(
+      projectWidth: (settings['width'] as num?)?.toInt() ?? 1080,
+      projectHeight: (settings['height'] as num?)?.toInt() ?? 1920,
+      projectFps: fpsDen > 0 ? fpsNum / fpsDen : 30.0,
       mainTrackId: trackId,
       clips: List.unmodifiable(clips),
       selectedClipId: root['selected_clip_id'] as String?,
