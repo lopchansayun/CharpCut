@@ -3,6 +3,7 @@ package com.example.charpcut
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
+import android.os.SystemClock
 import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
@@ -43,14 +44,23 @@ private data class PreviewClip(val id: String, val path: String, val start: Long
 
 /** Renders the clip ranges supplied by the Rust snapshot. It never edits them. */
 @UnstableApi
-class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, private val onDispose: (VideoPreview) -> Unit) : PlatformView {
+class VideoPreview(private val context: Context, id: Int, messenger: BinaryMessenger, private val onDispose: (VideoPreview) -> Unit) : PlatformView {
     private val view = LayoutInflater.from(context).inflate(R.layout.charpcut_preview, null) as PlayerView
     private val player = ExoPlayer.Builder(context).build()
+    private data class AudioLane(val player: ExoPlayer, val clips: List<PreviewClip>, var lastCorrection: Long = 0L)
+    private val audioLanes = mutableListOf<AudioLane>()
     private val mediaSources = DefaultMediaSourceFactory(context)
     private var aspectRatio = 0.0
     private val channel = MethodChannel(messenger, "charpcut/preview/$id")
     private val handler = Handler(Looper.getMainLooper())
     private var clips = emptyList<PreviewClip>()
+    private var audioClips = emptyList<PreviewClip>()
+    private var clipVolumes = emptyMap<String, Float>()
+    private var audioVolumes = emptyMap<String, Float>()
+    private var requestedPlaying = false
+    private var synchronizing = false
+    private var lastPublished: Map<String, Any?>? = null
+    private var muted = false
     private var revision = 0
     private var disposed = false
     private var updating = false
@@ -73,7 +83,7 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) { publish() }
             override fun onPlaybackSuppressionReasonChanged(reason: Int) {
-                if (reason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) player.pause()
+                if (reason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) pause()
                 publish()
             }
             override fun onRenderedFirstFrame() { hasFrame = true; publish() }
@@ -100,6 +110,7 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
                     result.success(null)
                 } catch (error: Exception) {
                     player.pause()
+                    audioLanes.forEach { it.player.pause() }
                     errorMessage = error.message ?: "Could not load the video preview"
                     publish()
                     result.error("preview_failed", errorMessage, null)
@@ -132,9 +143,22 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
         require(total >= expectedStart && total <= Long.MAX_VALUE / 1000) { "Invalid preview duration" }
         if (total > expectedStart) next.add(PreviewClip("gap-$expectedStart", "", expectedStart, 0, total - expectedStart))
         expectedStart = total
+        val sourceAudio = (args["audio_clips"] as? List<*>) ?: emptyList<Any>()
+        val nextAudio = sourceAudio.map { value ->
+            val item = value as Map<*, *>
+            val clip = PreviewClip(item["id"] as String, item["path"] as String,
+                (item["start_ms"] as Number).toLong(), (item["source_in_ms"] as Number).toLong(),
+                (item["duration_ms"] as Number).toLong())
+            require(clip.start >= 0 && clip.sourceIn >= 0 && clip.duration > 0 && Math.addExact(clip.start, clip.duration) <= total) { "Invalid audio range in the project" }
+            require(clip.path.isNotBlank()) { "Audio source is missing" }
+            if (!clip.path.contains("://")) require(File(clip.path).isFile && File(clip.path).canRead()) { "${File(clip.path).name} is missing or cannot be read" }
+            require(Math.addExact(clip.sourceIn, clip.duration) <= Long.MAX_VALUE / 1000) { "Audio duration is too large" }
+            clip
+        }.sortedBy { it.start }
         updating = true
         try {
             val changed = next != clips || args["retry"] == true
+            val audioChanged = nextAudio != audioClips || next.lastOrNull()?.let { it.start + it.duration } != clips.lastOrNull()?.let { it.start + it.duration } || args["retry"] == true
             if (changed) {
                 val sources = next.map { clip ->
                     if (clip.isGap) {
@@ -155,7 +179,58 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
                 player.setMediaSources(sources)
                 if (sources.isNotEmpty()) player.prepare()
             }
-            player.volume = if (args["muted"] == true) 0f else 1f
+            if (audioChanged) {
+                // Reuse sequential clips in one decoder; allocate more only for overlap.
+                audioLanes.forEach { it.player.release() }
+                audioLanes.clear()
+                audioClips = nextAudio
+                errorMessage = null
+                val packed = mutableListOf<MutableList<PreviewClip>>()
+                for (clip in nextAudio) {
+                    val lane = packed.firstOrNull { it.last().let { c -> c.start + c.duration <= clip.start } }
+                        ?: mutableListOf<PreviewClip>().also { packed.add(it) }
+                    lane.add(clip)
+                }
+                for (range in packed) {
+                    val filled = mutableListOf<PreviewClip>()
+                    var end = 0L
+                    for (clip in range) {
+                        if (clip.start > end) filled.add(PreviewClip("gap-$end", "", end, 0, clip.start - end))
+                        filled.add(clip)
+                        end = clip.start + clip.duration
+                    }
+                    if (total > end) filled.add(PreviewClip("gap-$end", "", end, 0, total - end))
+                    val decoder = ExoPlayer.Builder(context).build()
+                    val lane = AudioLane(decoder, filled)
+                    audioLanes.add(lane)
+                    decoder.setSeekParameters(SeekParameters.EXACT)
+                    decoder.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+                    decoder.addListener(object : Player.Listener {
+                        override fun onEvents(player: Player, events: Player.Events) { publish() }
+                        override fun onPlayerError(error: PlaybackException) {
+                            errorMessage = "Could not play timeline audio (${error.errorCodeName}): ${error.message}"
+                            pause()
+                        }
+                    })
+                    decoder.setMediaSources(filled.map { clip ->
+                        if (clip.isGap) SilenceMediaSource.Factory().setDurationUs(clip.duration * 1000).createMediaSource()
+                        else {
+                            val uri = if (clip.path.contains("://")) Uri.parse(clip.path) else Uri.fromFile(File(clip.path))
+                            mediaSources.createMediaSource(MediaItem.Builder().setMediaId(clip.id).setUri(uri)
+                                .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
+                                    .setStartPositionMs(clip.sourceIn).setEndPositionMs(clip.sourceIn + clip.duration).build()).build())
+                        }
+                    })
+                    decoder.prepare()
+                }
+            }
+            muted = args["muted"] == true
+            fun volumes(key: String): Map<String, Float> = (args[key] as? Map<*, *>)?.entries?.associate {
+                (it.key as String) to (it.value as Number).toFloat().coerceIn(0f, 1f)
+            } ?: emptyMap()
+            clipVolumes = volumes("clip_volumes")
+            audioVolumes = volumes("audio_volumes")
             if (clips.isNotEmpty() && (changed || args["seek"] == true)) {
                 val position = (args["position_ms"] as Number).toLong().coerceIn(0L, expectedStart)
                 val index = clips.indexOfLast { position >= it.start }.coerceAtLeast(0)
@@ -164,34 +239,93 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
                 val local = (position - clip.start).coerceIn(0L, (clip.duration - 1).coerceAtLeast(0))
                 player.seekTo(index, local)
             }
-            if (args["playing"] == true && clips.isNotEmpty() && errorMessage == null) player.play() else player.pause()
-            view.keepScreenOn = player.playWhenReady
+            if (audioChanged || changed || args["seek"] == true) {
+                val position = (args["position_ms"] as Number).toLong().coerceIn(0L, expectedStart)
+                for (lane in audioLanes) {
+                    val index = lane.clips.indexOfLast { position >= it.start }.coerceAtLeast(0)
+                    val clip = lane.clips[index]
+                    lane.player.seekTo(index, (position - clip.start).coerceIn(0L, clip.duration - 1))
+                    lane.lastCorrection = SystemClock.elapsedRealtime()
+                    lane.player.setPlaybackSpeed(1f)
+                }
+            }
+            requestedPlaying = args["playing"] == true && clips.isNotEmpty() && errorMessage == null
         } finally {
             updating = false
         }
         publish()
     }
 
+    /** Wait for both decoders; never repeatedly seek a buffering player. */
+    private fun synchronize() {
+        if (synchronizing || updating || disposed) return
+        synchronizing = true
+        try {
+            if (player.playbackState == Player.STATE_ENDED || errorMessage != null) requestedPlaying = false
+            val ready = player.playbackState == Player.STATE_READY && audioLanes.all {
+                it.player.playbackState == Player.STATE_READY || it.player.playbackState == Player.STATE_ENDED
+            }
+            val run = requestedPlaying && ready
+            if (player.playWhenReady != run) player.playWhenReady = run
+            for (lane in audioLanes) {
+                val decoder = lane.player
+                val active = run && decoder.playbackState != Player.STATE_ENDED
+                if (decoder.playWhenReady != active) decoder.playWhenReady = active
+                if (!active || !player.isPlaying || !decoder.isPlaying) continue
+                val video = clips.getOrNull(player.currentMediaItemIndex) ?: continue
+                val audio = lane.clips.getOrNull(decoder.currentMediaItemIndex) ?: continue
+                val position = video.start + player.currentPosition
+                val drift = position - (audio.start + decoder.currentPosition)
+                val now = SystemClock.elapsedRealtime()
+                if (kotlin.math.abs(drift) > 500 && now - lane.lastCorrection > 1500) {
+                    val index = lane.clips.indexOfLast { position >= it.start }.coerceAtLeast(0)
+                    val target = lane.clips[index]
+                    decoder.seekTo(index, (position - target.start).coerceIn(0L, target.duration - 1))
+                    lane.lastCorrection = now
+                    decoder.setPlaybackSpeed(1f)
+                } else if (now - lane.lastCorrection > 500) {
+                    val speed = when { drift > 40 -> 1.02f; drift < -40 -> .98f; else -> 1f }
+                    if (decoder.playbackParameters.speed != speed) decoder.setPlaybackSpeed(speed)
+                }
+            }
+        } finally { synchronizing = false }
+    }
+
     private fun publish() {
-        if (disposed || updating) return
+        if (disposed || updating || synchronizing) return
+        synchronize()
         val clip = clips.getOrNull(player.currentMediaItemIndex)
         val position = if (player.playbackState == Player.STATE_ENDED) clips.lastOrNull()?.let { it.start + it.duration } ?: 0L
             else clip?.let { it.start + player.currentPosition.coerceIn(0L, it.duration) } ?: 0L
         val gap = clip?.isGap == true
+        val videoVolume = if (muted || gap) 0f else clipVolumes[clip?.id] ?: 1f
+        if (player.volume != videoVolume) player.volume = videoVolume
+        for (lane in audioLanes) {
+            val currentAudio = lane.clips.getOrNull(lane.player.currentMediaItemIndex)
+            val volume = if (currentAudio?.isGap == true) 0f else audioVolumes[currentAudio?.id] ?: 1f
+            if (lane.player.volume != volume) lane.player.volume = volume
+        }
         // Hide the previous video during a silence source without detaching its surface.
         view.videoSurfaceView?.alpha = if (gap) 0f else 1f
         view.keepScreenOn = player.playWhenReady && player.playbackState != Player.STATE_ENDED && errorMessage == null
-        channel.invokeMethod("state", mapOf(
+        val state = mapOf<String, Any?>(
             "revision" to revision, "position_ms" to position,
-            "playing" to (player.playWhenReady && player.playbackState != Player.STATE_ENDED && errorMessage == null),
+            "playing" to requestedPlaying,
             "has_frame" to (hasFrame || gap), "error" to errorMessage,
-            "buffering" to (player.playbackState == Player.STATE_BUFFERING),
-            "gap" to gap, "aspect_ratio" to aspectRatio))
+            "buffering" to (requestedPlaying && (player.playbackState == Player.STATE_BUFFERING ||
+                audioLanes.any { it.player.playbackState == Player.STATE_BUFFERING })),
+            "gap" to gap, "aspect_ratio" to aspectRatio)
+        if (state != lastPublished) {
+            lastPublished = state
+            channel.invokeMethod("state", state)
+        }
     }
 
     fun pause() {
         if (disposed) return
+        requestedPlaying = false
         player.pause()
+        audioLanes.forEach { it.player.pause() }
         view.keepScreenOn = false
         publish()
     }
@@ -203,6 +337,7 @@ class VideoPreview(context: Context, id: Int, messenger: BinaryMessenger, privat
         channel.setMethodCallHandler(null)
         view.player = null
         player.release()
+        audioLanes.forEach { it.player.release() }
         onDispose(this)
     }
 }

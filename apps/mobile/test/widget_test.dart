@@ -11,6 +11,7 @@ Widget app(Widget home) => EngineScope(previewEnabled: false, engine: FakeEngine
 void main() {
   setUp(mockVideoPicker);
   testWidgets('launch screen shows centered CharpCut branding', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(CharpCutApp(engine: FakeEngine()));
 
     expect(find.text('CharpCut'), findsOneWidget);
@@ -23,6 +24,7 @@ void main() {
   });
 
   testWidgets('home page offers new video, tools and bottom navigation', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const HomeScreen()));
 
     expect(find.text('New video'), findsOneWidget);
@@ -34,6 +36,7 @@ void main() {
   });
 
   testWidgets('editor shows the main toolbar, timeline rows and undo redo', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
@@ -41,13 +44,15 @@ void main() {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('Add audio'), findsOneWidget);
-    expect(find.text('Add text'), findsOneWidget);
+    expect(find.text('Add image'), findsOneWidget);
+    expect(find.text('Add overlay'), findsOneWidget);
     expect(find.text('Export'), findsOneWidget);
     expect(find.byTooltip('Undo'), findsOneWidget);
     expect(find.byTooltip('Redo'), findsOneWidget);
   });
 
   testWidgets('editor starts empty and Edit asks for a clip first', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
@@ -60,11 +65,11 @@ void main() {
   });
 
   testWidgets('adding a clip selects it and swaps in the clip toolbar; back returns', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
 
     expect(find.text('Split'), findsOneWidget);
     expect(find.text('Delete'), findsOneWidget);
@@ -78,13 +83,12 @@ void main() {
   });
 
   testWidgets('deleting a clip supports undo', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
+    await tapTool(tester, 'Delete');
 
     // Deleting clears the selection, so the main toolbar is back and the timeline is empty.
     expect(find.text('Overlay'), findsOneWidget);
@@ -97,6 +101,7 @@ void main() {
   });
 
   testWidgets('quality pill opens export settings with sliders', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
@@ -111,11 +116,11 @@ void main() {
   });
 
   testWidgets('split at the playhead is refused outside the clip and the engine message is shown', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
     // The playhead is at 0, the very start of the clip.
     await tester.tap(find.text('Split'));
     await tester.pumpAndSettle();
@@ -125,24 +130,27 @@ void main() {
   });
 
   testWidgets('trim shortens the clip through the engine', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
     expect(find.text('3.0s'), findsOneWidget);
 
     await tester.tap(find.text('Trim'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'End (seconds)'), '2.5');
+    await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
     expect(find.text('2.5s'), findsOneWidget);
   });
 
   testWidgets('undo and redo go through the engine', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
     expect(find.text('Tap + to add a clip'), findsNothing);
 
     await tester.tap(find.byTooltip('Undo'));
@@ -155,6 +163,7 @@ void main() {
   });
 
   testWidgets('exporting an empty project is refused', (WidgetTester tester) async {
+    await phoneSurface(tester);
     await tester.pumpWidget(app(const EditorHome()));
     await tester.pump();
 

@@ -23,6 +23,10 @@ Future<String> seekPlayhead({required PlatformInt64 timelineMs}) =>
 Future<String> setMainTrackMuted({required bool muted}) =>
     RustLib.instance.api.crateApiSetMainTrackMuted(muted: muted);
 
+/// Locks or unlocks clips on one timeline track.
+Future<String> setTrackLocked({required String kind, required bool locked}) =>
+    RustLib.instance.api.crateApiSetTrackLocked(kind: kind, locked: locked);
+
 /// Moves the selected clip to a final zero-based index on the gapless track.
 Future<String> moveSelectedClip({required PlatformInt64 targetIndex}) =>
     RustLib.instance.api.crateApiMoveSelectedClip(targetIndex: targetIndex);
@@ -36,6 +40,17 @@ Future<String> addClip({
   required String path,
   required PlatformInt64 durationMs,
 }) => RustLib.instance.api.crateApiAddClip(path: path, durationMs: durationMs);
+
+/// Appends imported audio or an image to its editable timeline track.
+Future<String> addTimelineMedia({
+  required String path,
+  required PlatformInt64 durationMs,
+  required String kind,
+}) => RustLib.instance.api.crateApiAddTimelineMedia(
+  path: path,
+  durationMs: durationMs,
+  kind: kind,
+);
 
 /// Splits the selected clip at a position on the timeline (the playhead).
 Future<String> splitSelectedClipAt({required PlatformInt64 timelineMs}) =>
@@ -54,6 +69,10 @@ Future<String> trimSelectedClip({
 Future<String> deleteSelectedClip() =>
     RustLib.instance.api.crateApiDeleteSelectedClip();
 
+/// Inserts a copy of the selected clip directly after it.
+Future<String> duplicateSelectedClip() =>
+    RustLib.instance.api.crateApiDuplicateSelectedClip();
+
 /// Undoes the last edit.
 Future<String> undo() => RustLib.instance.api.crateApiUndo();
 
@@ -68,3 +87,7 @@ Future<String> exportProjectJson() =>
 /// project alone and is reported in `last_error`.
 Future<String> openProjectJson({required String json}) =>
     RustLib.instance.api.crateApiOpenProjectJson(json: json);
+
+/// Applies a validated, atomic batch or clip-property edit.
+Future<String> applyTimelineEdit({required String json}) =>
+    RustLib.instance.api.crateApiApplyTimelineEdit(json: json);

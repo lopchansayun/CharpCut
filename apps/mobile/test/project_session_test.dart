@@ -37,38 +37,36 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(mockVideoPicker);
 
-  testWidgets(
-    'opening a saved project can be cancelled without losing the draft',
-    (tester) async {
-      final store = MemoryStore();
-      final session = ProjectSession(FakeEngine(), store);
-      await session.addClip(path: 'a.mp4', durationMs: 4000);
-      await session.save();
-      await session.addClip(path: 'b.mp4', durationMs: 3000);
-      final draft = store.data[ProjectSlot.draft];
-      await tester.pumpWidget(
-        EngineScope(previewEnabled: false,
-          engine: session,
-          child: const MaterialApp(home: HomeScreen()),
-        ),
-      );
-      await tester.tap(find.text('Projects').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Open saved project'));
-      await tester.pumpAndSettle();
-      expect(find.text('Replace recovery draft?'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(store.data[ProjectSlot.draft], draft);
-      expect((await session.getState()).totalDurationMs, 7000);
-    },
-  );
+  testWidgets('project picker cancellation preserves the active draft', (tester) async {
+    final store = MemoryStore();
+    final session = ProjectSession(FakeEngine(), store);
+    await session.addClip(path: 'a.mp4', durationMs: 4000);
+    final id = (await session.listDrafts()).single.id;
+    await session.addClip(path: 'b.mp4', durationMs: 3000);
+    final original = (await session.listDrafts()).single;
+    await phoneSurface(tester);
+    await tester.pumpWidget(EngineScope(previewEnabled: false, engine: session,
+      child: MaterialApp(home: EditorHome(draftId: id))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Project'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open project'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open project'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(find.text('Open project'), findsNothing);
+    expect((await session.listDrafts()).single.id, original.id);
+    expect((await session.listDrafts()).single.json, original.json);
+    expect((await session.getState()).totalDurationMs, 7000);
+  });
 
   testWidgets('editor still shows a successful edit when autosave fails', (
     tester,
   ) async {
     final store = MemoryStore();
     final session = ProjectSession(FakeEngine(), store);
+    await phoneSurface(tester);
     await tester.pumpWidget(
       EngineScope(previewEnabled: false,
         engine: session,
@@ -77,8 +75,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     store.fail = true;
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
     expect(find.text('Split'), findsOneWidget);
     expect(find.textContaining('Autosave failed.'), findsOneWidget);
     await tester.tap(find.text('Split'));
@@ -98,22 +95,22 @@ void main() {
       await session.addClip(path: 'a.mp4', durationMs: 4000);
       await session.splitSelectedAt(1500);
       await session.save();
-      final saved = store.data[ProjectSlot.saved]!;
-    expect(jsonDecode(saved)['version'], 2);
+      final draft = (await session.listDrafts()).single;
+      final saved = draft.json;
+      expect(jsonDecode(saved)['version'], 5);
       await session.deleteSelected();
-      expect(store.data[ProjectSlot.saved], saved);
-      expect(store.data[ProjectSlot.draft], isNot(saved));
+      expect((await session.listDrafts()).single.id, draft.id);
+      expect((await session.listDrafts()).single.json, isNot(saved));
       await session.undo();
-      expect(store.data[ProjectSlot.draft], saved);
+      expect((await session.listDrafts()).single.json, saved);
       await session.redo();
       final reopened = ProjectSession(FakeEngine(), store);
-      final state = await reopened.openProjectJson(
-        (await reopened.readSlot(ProjectSlot.draft))!,
-      );
+      final state = await reopened.openDraft(draft.id);
       expect(state.clips.single.durationMs, 1500);
       expect(state.canUndo, false);
       final explicit = await reopened.openProjectJson(saved);
       expect(explicit.clips.map((c) => c.durationMs), [1500, 2500]);
+      expect(await reopened.listDrafts(), hasLength(2));
     },
   );
 
@@ -123,13 +120,13 @@ void main() {
       final store = MemoryStore();
       final session = ProjectSession(FakeEngine(), store);
       await session.addClip(path: 'a.mp4', durationMs: 4000);
-      final draft = store.data[ProjectSlot.draft];
+      final draft = store.data[ProjectSlot.library];
       final writes = store.writes;
       await session.splitSelectedAt(0);
       await session.openProjectJson('not JSON');
       await session.openProjectJson('{"version":999}');
       expect(store.writes, writes);
-      expect(store.data[ProjectSlot.draft], draft);
+      expect(store.data[ProjectSlot.library], draft);
       expect((await session.getState()).clips.single.durationMs, 4000);
     },
   );
@@ -146,9 +143,7 @@ void main() {
       store.gate!.complete();
       await Future.wait([first, second]);
       final recovered = ProjectSession(FakeEngine(), store);
-      final state = await recovered.openProjectJson(
-        store.data[ProjectSlot.draft]!,
-      );
+      final state = await recovered.openDraft((await recovered.listDrafts()).single.id);
       expect(state.totalDurationMs, 7000);
       final writes = store.writes;
       await session.select(null);
@@ -162,17 +157,17 @@ void main() {
       final store = MemoryStore();
       final session = ProjectSession(FakeEngine(), store);
       await session.newProject();
-      final previous = store.data[ProjectSlot.draft];
+      final previous = store.data[ProjectSlot.library];
       store.fail = true;
       final state = await session.addClip(path: 'a.mp4', durationMs: 4000);
       expect(state.clips, hasLength(1));
       expect(session.storageError, contains('Autosave failed'));
-      expect(store.data[ProjectSlot.draft], previous);
+      expect(store.data[ProjectSlot.library], previous);
       await expectLater(session.save(), throwsA(isA<Exception>()));
       store.fail = false;
       await session.save();
       expect(session.storageError, null);
-      expect(store.data[ProjectSlot.draft], await session.exportProjectJson());
+      expect((await session.listDrafts()).single.json, await session.exportProjectJson());
     },
   );
 
@@ -212,22 +207,22 @@ void main() {
       final old = ProjectSession(FakeEngine(), store);
       await old.addClip(path: 'a.mp4', durationMs: 4000);
       final fresh = ProjectSession(FakeEngine(), store);
-      await tester.pumpWidget(
+      await phoneSurface(tester);
+    await tester.pumpWidget(
         EngineScope(previewEnabled: false,
           engine: fresh,
           child: const MaterialApp(home: HomeScreen()),
         ),
       );
-      await tester.tap(find.text('New video'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Resume draft').last);
+      await tester.tap(find.text('A').first);
       await tester.pumpAndSettle();
       expect((await fresh.getState()).totalDurationMs, 4000);
       await tester.tap(find.byTooltip('Project'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save project'));
       await tester.pumpAndSettle();
-      expect(store.data[ProjectSlot.saved], store.data[ProjectSlot.draft]);
+      expect((await fresh.listDrafts()).single.json, await fresh.exportProjectJson());
       expect(find.text('Project saved on this device'), findsOneWidget);
     },
   );

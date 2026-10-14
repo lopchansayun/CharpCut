@@ -9,15 +9,19 @@ import 'editor_state.dart';
 /// split outside the clip, ...) leaves the project unchanged and sets
 /// [EditorState.lastError].
 abstract class EditorEngine {
+  Future<EditorState> applyTimelineEdit(Map<String, dynamic> edit);
+
   Future<EditorState> newProject();
   Future<EditorState> getState();
   Future<EditorState> select(String? clipId);
   Future<EditorState> seek(int timelineMs);
   Future<EditorState> setMuted(bool muted);
+  Future<EditorState> setTrackLocked(String kind, bool locked);
   Future<EditorState> moveSelected(int targetIndex);
 
   /// Appends a clip covering a whole media file and selects it.
   Future<EditorState> addClip({required String path, required int durationMs});
+  Future<EditorState> addTimelineMedia({required String path, required int durationMs, required String kind});
 
   /// Splits the selected clip at a timeline position (the playhead).
   Future<EditorState> splitSelectedAt(int timelineMs);
@@ -25,6 +29,7 @@ abstract class EditorEngine {
   /// Sets which part of the source the selected clip plays.
   Future<EditorState> trimSelected({required int sourceInMs, required int durationMs});
   Future<EditorState> deleteSelected();
+  Future<EditorState> duplicateSelected();
   Future<EditorState> undo();
   Future<EditorState> redo();
 

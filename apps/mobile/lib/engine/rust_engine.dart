@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../src/rust/api.dart' as rust;
 import 'editor_engine.dart';
 import 'editor_state.dart';
@@ -13,7 +14,13 @@ class RustEditorEngine implements EditorEngine {
   @override
   Future<EditorState> setMuted(bool muted) async => _read(await rust.setMainTrackMuted(muted: muted));
   @override
+  Future<EditorState> setTrackLocked(String kind, bool locked) async =>
+      _read(await rust.setTrackLocked(kind: kind, locked: locked));
+  @override
   Future<EditorState> moveSelected(int targetIndex) async => _read(await rust.moveSelectedClip(targetIndex: targetIndex));
+
+  @override
+  Future<EditorState> applyTimelineEdit(Map<String, dynamic> edit) async => _read(await rust.applyTimelineEdit(json: jsonEncode(edit)));
 
   @override
   Future<EditorState> newProject() async => _read(await rust.newProject());
@@ -29,6 +36,10 @@ class RustEditorEngine implements EditorEngine {
       _read(await rust.addClip(path: path, durationMs: durationMs));
 
   @override
+  Future<EditorState> addTimelineMedia({required String path, required int durationMs, required String kind}) async =>
+      _read(await rust.addTimelineMedia(path: path, durationMs: durationMs, kind: kind));
+
+  @override
   Future<EditorState> splitSelectedAt(int timelineMs) async =>
       _read(await rust.splitSelectedClipAt(timelineMs: timelineMs));
 
@@ -38,6 +49,8 @@ class RustEditorEngine implements EditorEngine {
 
   @override
   Future<EditorState> deleteSelected() async => _read(await rust.deleteSelectedClip());
+  @override
+  Future<EditorState> duplicateSelected() async => _read(await rust.duplicateSelectedClip());
 
   @override
   Future<EditorState> undo() async => _read(await rust.undo());

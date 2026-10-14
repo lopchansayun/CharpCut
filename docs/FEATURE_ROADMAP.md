@@ -1,13 +1,13 @@
 # CharpCut feature roadmap
 
-This is the single source of truth for feature planning. `[x]` means the feature is implemented and accepted in the owner's Android testing; `[ ]` means work or targeted verification remains. The owner reported that the Phase 1–3 app flows work. The assistant did not rerun the recent Android builds or tests.
+This is the single source of truth for feature planning. `[x]` means the feature is implemented and accepted in the owner's Android testing; `[ ]` means work or targeted verification remains. The owner confirmed Phase 4 complete on 2026-10-14 after Android testing. Automated checks from implementation are recorded in the architecture guide; this documentation update did not rerun them.
 
 ## Current status
 
 - **Phase 1: complete.** Rust-driven editing, undo/redo, autosave and project persistence work on the owner's device.
 - **Phase 2: complete.** Video/audio/image import, media metadata, thumbnails, library and project management work on the owner's device.
 - **Phase 3: interactive preview accepted.** The owner ran the app and confirmed playback, seeking, fullscreen and zoom/pan work. A gap fixture and decoder-failure paths still need targeted checks because normal editing does not produce gaps.
-- **Next: Phase 4.** Timeline editing needs more clip operations, precise controls, and audio/image/overlay tracks. Text, transitions, cover editing and real export remain later work.
+- **Phase 4: complete.** The owner accepted timeline editing, multi-select, track reorder, saved properties, preview composition, overlapping audio/image/overlay clips, and playback-only fullscreen on 2026-10-14.
 
 ## Phase 0 — Foundation and Android stability
 
@@ -46,20 +46,31 @@ Audio and image files are library assets in this phase. Adding them to editable 
 - [x] Implement black/silent playback for leading, intermediate and trailing gaps in a loaded timeline.
 - [ ] Exercise gap playback with a valid fixture and decoder-failure recovery on a device; the normal editor packs clips without gaps.
 
-Consecutive clips currently use hard cuts. Fade and crossfade authoring/rendering belong to Phase 5. Viewing zoom does not save a crop or scale edit; that belongs to Phase 4. A dedicated Rust renderer edit list and shared preview/export interface remain planned before the composition/export pipeline grows.
+Consecutive clips currently use hard cuts. Fade and crossfade authoring/rendering belong to Phase 5. Viewing zoom is transient; Phase 4 Properties saves canvas crop and scale independently. A dedicated Rust renderer edit list and shared preview/export interface remain planned before the composition/export pipeline grows.
 
 ## Phase 4 — Essential timeline editing
 
+Direct preview layer selection, move/scale/rotate/delete controls, timeline trim handles, and overlapping audio/image/overlay clips are implemented. Numeric dialogs stay anchored when the keyboard opens. Playback synchronization and tick processing have been optimized; the owner accepted gesture behavior and audio playback on the device.
+
+
+**Status:** Complete — owner acceptance recorded on 2026-10-14.
+
 **Goal:** Make timeline operations useful with real media.
 
-- [ ] Split, trim start/end, move, reorder, delete, duplicate, and ripple-delete clips.
-- [ ] Add timeline zoom, horizontal scrolling, a time ruler, snapping, and precise playhead control.
-- [ ] Support video, audio, image, and overlay tracks.
-- [ ] Add clip selection, multi-select, track lock, and track reorder.
-- [ ] Add position, duration, scale, rotation, crop, opacity, and volume properties.
-- [ ] Keep undo/redo and saved projects consistent for every operation.
+- [x] Split, trim start/end, move, reorder, delete, duplicate, and ripple-delete clips.
+- [x] Add timeline zoom, horizontal scrolling, a time ruler, snapping, and precise playhead control.
+- [x] Support video, audio, image, and overlay tracks.
+- [x] Add clip selection, multi-select, track lock, and track reorder.
+- [x] Add position, duration, scale, rotation, crop, opacity, and volume properties.
+- [x] Keep undo/redo and saved projects consistent for every operation.
 
 **Acceptance criteria:** Editing operations update both the timeline and preview, and remain correct after save/reopen and undo/redo.
+
+**Current implementation:** Each listed operation is implemented. Select multiple clips with **Select**, then move by a signed time offset, duplicate, delete while retaining gaps, or ripple-delete in one undo step. **Tracks** reorders existing lanes and the visual layer stack; the last lane is the front layer. Locked tracks cannot be edited or moved, including indirectly by reordering another lane.
+
+**Properties** edits timeline start/duration, canvas X/Y position, scale (10–1000%), rotation (±180°), per-edge canvas crop, opacity, and video/audio volume (0–100%). Overlaps on the main video track and invalid ranges are rejected atomically; audio, image, and overlay clips may overlap. Visual transforms compose in project-canvas coordinates; pinch gestures transform a selected layer in the editor, or adjust inspection zoom when no layer is selected. Fullscreen disables these gestures. Secondary clip trimming and deletion preserve neighboring positions. Main-video trim and ripple delete shift later clips by the duration change. Explicit clip reorder repacks its lane.
+
+Schema 5 preserves properties and track order and migrates schemas 1–4 with default properties. Android preview applies per-clip volume to video and audio playlists; Flutter renders visual properties and layer order. Tests cover persistence, undo/redo, lock rejection, batch atomicity, migration, and property-form/multi-select commands. The owner has accepted Phase 4 on the device; this phase is closed.
 
 ## Phase 5 — Text, transitions, overlays, and visual effects
 
@@ -82,6 +93,7 @@ Consecutive clips currently use hard cuts. Fade and crossfade authoring/renderin
 
 - [ ] Add music and sound effects.
 - [ ] Record or import voiceovers.
+- [ ] Extract audio from a video into an independently editable audio clip.
 - [ ] Display waveforms.
 - [ ] Control clip and track volume; mute and solo tracks.
 - [ ] Add fade-in and fade-out.
@@ -132,4 +144,8 @@ AI features such as background removal, automatic captions, and beat detection s
 
 ## Recommended next step
 
-Start Phase 4 timeline editing while retaining the accepted Phase 1–3 flows. Also run targeted gap/error preview checks when suitable fixtures are available.
+Phase 5 is next: text, transitions between clips (fade/crossfade), and visual effects. Audio extraction remains planned for Phase 6. Targeted gap/error preview fixtures remain a separate reliability follow-up.
+
+Main video preview keeps direct touch transforms without the blue range slider or floating delete/transform handles. Secondary clips can be long-press-dragged to overlap and remain separately selectable.
+
+Fullscreen preview is playback-only: no layer selection, transform handles, drag, pinch scale/rotation, or viewing zoom. Entering fullscreen resets inspection zoom while retaining saved composition transforms.

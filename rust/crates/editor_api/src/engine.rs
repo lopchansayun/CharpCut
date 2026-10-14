@@ -2,8 +2,9 @@
 //! the undo/redo history, and is plain Rust so it can be unit-tested without
 //! Flutter. `api.rs` wraps one shared instance for the app.
 
-use charpcut_timeline::{Millis, Project, TimelineError, TrackKind, MIN_CLIP_MS};
-use serde::Serialize;
+use charpcut_timeline::{MediaKind, Millis, Project, TimelineError, TrackKind, MIN_CLIP_MS};
+use serde::{Deserialize, Serialize};
+use charpcut_timeline::ClipProperties;
 
 /// How many edits can be undone.
 const UNDO_LIMIT: usize = 100;
@@ -48,6 +49,17 @@ pub struct Engine {
     redo: Vec<Snapshot>,
     status: String,
     last_error: Option<String>,
+}
+
+/// A batch is validated and committed as one undoable edit.
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum TimelineEdit {
+    Properties { clip_id: String, start_ms: Millis, duration_ms: Millis, properties: ClipProperties },
+    Delete { clip_ids: Vec<String>, ripple: bool },
+    Duplicate { clip_ids: Vec<String> },
+    Shift { clip_ids: Vec<String>, delta_ms: i64 },
+    ReorderTracks { track_ids: Vec<String> },
 }
 
 impl Default for Engine {
@@ -129,6 +141,8 @@ impl Engine {
         self.last_error = None;
     }
 
+    pub fn reject(&mut self, message: &str) { self.fail(message.into()); }
+
     pub fn set_main_track_muted(&mut self, muted: bool) {
         let track = self.main_track_id.clone();
         self.edit(if muted { "Track muted" } else { "Track unmuted" }, move |project, _| {
@@ -138,10 +152,18 @@ impl Engine {
         });
     }
 
+    pub fn set_track_locked(&mut self, kind: TrackKind, locked: bool) {
+        self.edit(if locked { "Track locked" } else { "Track unlocked" }, move |project, _| {
+            project.tracks.iter_mut().find(|t| t.kind == kind)
+                .ok_or("Track not found")?.locked = locked;
+            Ok(())
+        });
+    }
+
     pub fn move_selected(&mut self, target_index: i64) {
-        let track = self.main_track_id.clone();
         self.edit("Clip moved", move |project, selected| {
             let clip = selected.as_deref().ok_or("Select a clip first")?;
+            let track = project.find_clip(clip).ok_or("Clip not found")?.0.id.clone();
             let index = usize::try_from(target_index).map_err(|_| "Clip position must not be negative")?;
             project.reorder_clip(&track, clip, index).map_err(describe)
         });
@@ -165,11 +187,35 @@ impl Engine {
         });
     }
 
+    pub fn add_timeline_media(&mut self, path: &str, duration_ms: Millis, kind: MediaKind, overlay: bool) {
+        let path = path.to_string();
+        self.edit("Media added", move |project, selected| {
+            if path.trim().is_empty() { return Err("Media path is empty".into()); }
+            if duration_ms < MIN_CLIP_MS { return Err("Media is too short to add".into()); }
+            let track_kind = if overlay { TrackKind::Overlay } else { match kind {
+                MediaKind::Video => TrackKind::Video,
+                MediaKind::Audio => TrackKind::Audio,
+                MediaKind::Image => TrackKind::Image,
+            }};
+            let track = match project.tracks.iter().find(|t| t.kind == track_kind) {
+                Some(t) => t.id.clone(),
+                None => project.add_track(track_kind),
+            };
+            // Still images have no source clock. Reserve a generous validated
+            // range so their timeline duration can be extended later.
+            let source_duration = if kind == MediaKind::Image { 86_400_000 } else { duration_ms };
+            let asset = project.add_media_asset(path, source_duration, kind);
+            let clip = project.append_clip(&track, &asset, 0, duration_ms).map_err(describe)?;
+            *selected = Some(clip);
+            Ok(())
+        });
+    }
+
     /// Splits the selected clip at an absolute timeline position and selects the second half.
     pub fn split_selected(&mut self, timeline_ms: Millis) {
-        let track = self.main_track_id.clone();
         self.edit("Clip split", move |project, selected| {
             let clip = selected.clone().ok_or("Select a clip first")?;
+            let track = project.find_clip(&clip).ok_or("Clip not found")?.0.id.clone();
             let (_, second) = project.split_clip_at(&track, &clip, timeline_ms).map_err(describe)?;
             *selected = Some(second);
             Ok(())
@@ -178,21 +224,137 @@ impl Engine {
 
     /// Sets which part of the source the selected clip plays. The track closes up afterwards.
     pub fn trim_selected(&mut self, source_in_ms: Millis, duration_ms: Millis) {
-        let track = self.main_track_id.clone();
         self.edit("Clip trimmed", move |project, selected| {
             let clip = selected.clone().ok_or("Select a clip first")?;
+            let track = project.find_clip(&clip).ok_or("Clip not found")?.0.id.clone();
+            let old = project.find_clip(&clip).unwrap().1.clone();
             project.trim_clip(&track, &clip, source_in_ms, duration_ms).map_err(describe)?;
-            project.ripple_track(&track).map_err(describe)?;
+            let lane = project.tracks.iter_mut().find(|t| t.id == track).unwrap();
+            for later in &mut lane.clips {
+                if lane.kind != TrackKind::Video { break; }
+                if later.id != clip && later.timeline_start_ms >= old.timeline_end_ms() {
+                    later.timeline_start_ms = later.timeline_start_ms.checked_sub(old.duration_ms)
+                        .and_then(|start| start.checked_add(duration_ms)).ok_or("Timeline too long")?;
+                }
+            }
             Ok(())
         });
     }
 
     pub fn delete_selected(&mut self) {
-        let track = self.main_track_id.clone();
         self.edit("Clip deleted", move |project, selected| {
             let clip = selected.take().ok_or("Select a clip first")?;
-            project.delete_clip(&track, &clip).map_err(describe)?;
-            project.ripple_track(&track).map_err(describe)?;
+            let track = project.find_clip(&clip).ok_or("Clip not found")?.0.id.clone();
+            let removed = project.delete_clip(&track, &clip).map_err(describe)?;
+            let lane = project.tracks.iter_mut().find(|t| t.id == track).unwrap();
+            for later in &mut lane.clips {
+                if lane.kind != TrackKind::Video { break; }
+                if later.timeline_start_ms >= removed.timeline_end_ms() { later.timeline_start_ms -= removed.duration_ms; }
+            }
+            Ok(())
+        });
+    }
+
+    pub fn duplicate_selected(&mut self) {
+        self.edit("Clip duplicated", move |project, selected| {
+            let clip = selected.clone().ok_or("Select a clip first")?;
+            let track = project.find_clip(&clip).ok_or("Clip not found")?.0.id.clone();
+            let copy = project.duplicate_clip(&track, &clip).map_err(describe)?;
+            *selected = Some(copy);
+            Ok(())
+        });
+    }
+
+    pub fn apply_timeline_edit(&mut self, json: &str) {
+        let command: TimelineEdit = match serde_json::from_str(json) {
+            Ok(value) => value,
+            Err(error) => { self.fail(format!("Invalid edit: {error}")); return; }
+        };
+        self.edit("Timeline updated", move |project, selected| {
+            match command {
+                TimelineEdit::ReorderTracks { track_ids } => {
+                    let unique: std::collections::HashSet<_> = track_ids.iter().collect();
+                    if unique.len() != project.tracks.len() || track_ids.len() != unique.len()
+                        || track_ids.iter().any(|id| !project.tracks.iter().any(|t| &t.id == id)) {
+                        return Err("Include each track exactly once".into());
+                    }
+                    // Locked lanes cannot move, even indirectly through another lane.
+                    for (index, track) in project.tracks.iter().enumerate() {
+                        if track.locked && track_ids[index] != track.id { return Err("Unlock tracks before reordering".into()); }
+                    }
+                    project.tracks.sort_by_key(|t| track_ids.iter().position(|id| id == &t.id).unwrap());
+                }
+                TimelineEdit::Properties { clip_id, start_ms, duration_ms, properties } => {
+                    if duration_ms < MIN_CLIP_MS || !properties.valid() { return Err("Invalid clip properties".into()); }
+                    let track_id = project.find_clip(&clip_id).ok_or("Clip not found")?.0.id.clone();
+                    let track = project.tracks.iter_mut().find(|t| t.id == track_id).unwrap();
+                    if track.locked { return Err("Track is locked".into()); }
+                    let clip = track.clips.iter_mut().find(|c| c.id == clip_id).unwrap();
+                    clip.timeline_start_ms = start_ms;
+                    clip.duration_ms = duration_ms;
+                    clip.properties = properties;
+                    track.clips.sort_by_key(|c| c.timeline_start_ms);
+                }
+                other => {
+                    let ids = match &other {
+                        TimelineEdit::Delete { clip_ids, .. } | TimelineEdit::Duplicate { clip_ids }
+                            | TimelineEdit::Shift { clip_ids, .. } => clip_ids,
+                        _ => unreachable!(),
+                    };
+                    let unique: std::collections::HashSet<_> = ids.iter().collect();
+                    if ids.is_empty() || ids.len() != unique.len() { return Err("Select distinct clips".into()); }
+                    for id in ids {
+                        let (track, _) = project.find_clip(id).ok_or("Clip not found")?;
+                        if track.locked { return Err("Track is locked".into()); }
+                    }
+                    match other {
+                        TimelineEdit::Delete { clip_ids, ripple } => {
+                            for track in &mut project.tracks {
+                                let removed: Vec<_> = track.clips.iter().filter(|c| clip_ids.contains(&c.id)).cloned().collect();
+                                track.clips.retain(|c| !clip_ids.contains(&c.id));
+                                if ripple && track.kind == TrackKind::Video {
+                                    for clip in &mut track.clips {
+                                        let shift: u64 = removed.iter().filter(|r| r.timeline_start_ms < clip.timeline_start_ms)
+                                            .map(|r| r.duration_ms).sum();
+                                        clip.timeline_start_ms -= shift;
+                                    }
+                                }
+                            }
+                            if selected.as_ref().is_some_and(|id| clip_ids.contains(id)) { *selected = None; }
+                        }
+                        TimelineEdit::Duplicate { clip_ids } => {
+                            for track in &mut project.tracks {
+                                let mut next = Vec::new();
+                                let mut shift = 0u64;
+                                for original in &track.clips {
+                                    let mut clip = original.clone();
+                                    clip.timeline_start_ms = clip.timeline_start_ms.checked_add(shift).ok_or("Timeline too long")?;
+                                    next.push(clip.clone());
+                                    if clip_ids.contains(&clip.id) {
+                                        clip.id = uuid::Uuid::new_v4().to_string();
+                                        clip.timeline_start_ms = clip.timeline_start_ms.checked_add(clip.duration_ms).ok_or("Timeline too long")?;
+                                        if track.kind == TrackKind::Video { shift = shift.checked_add(clip.duration_ms).ok_or("Timeline too long")?; }
+                                        next.push(clip);
+                                    }
+                                }
+                                track.clips = next;
+                            }
+                        }
+                        TimelineEdit::Shift { clip_ids, delta_ms } => {
+                            for track in &mut project.tracks {
+                                for clip in &mut track.clips {
+                                    if clip_ids.contains(&clip.id) {
+                                        clip.timeline_start_ms = clip.timeline_start_ms.checked_add_signed(delta_ms)
+                                            .ok_or("Clips cannot move before zero or past the timeline limit")?;
+                                    }
+                                }
+                                track.clips.sort_by_key(|c| c.timeline_start_ms);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
             Ok(())
         });
     }
@@ -311,6 +473,131 @@ fn describe(error: TimelineError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command(e: &mut Engine, value: serde_json::Value) {
+        e.apply_timeline_edit(&value.to_string());
+        assert_eq!(e.snapshot().last_error, None);
+    }
+
+    #[test]
+    fn properties_round_trip_history_and_migration() {
+        let mut e = engine_with_clip(4_000);
+        let id = e.snapshot().selected_clip_id.unwrap();
+        let before = e.save_json().unwrap();
+        let properties = ClipProperties { x: 0.2, y: -0.1, scale: 1.5, rotation: 45.0,
+            crop_left: 0.1, crop_top: 0.2, opacity: 0.4, volume: 0.3, ..Default::default() };
+        command(&mut e, serde_json::json!({"action":"properties", "clip_id":id,
+            "start_ms":700, "duration_ms":2500, "properties":properties}));
+        let after = e.save_json().unwrap();
+        e.undo(); assert_eq!(e.save_json().unwrap(), before);
+        e.redo(); assert_eq!(e.save_json().unwrap(), after);
+        e.open_json(&after);
+        assert_eq!(e.project.find_clip(&id).unwrap().1.properties, properties);
+        let mut legacy: serde_json::Value = serde_json::from_str(&before).unwrap();
+        legacy["version"] = 3.into();
+        legacy["tracks"][0]["clips"][0].as_object_mut().unwrap().remove("properties");
+        e.open_json(&legacy.to_string());
+        assert_eq!(e.snapshot().last_error, None);
+        assert_eq!(e.project.find_clip(&id).unwrap().1.properties, ClipProperties::default());
+        assert_eq!(e.project.version, 5);
+    }
+
+    #[test]
+    fn batch_edits_are_atomic_and_preserve_gaps() {
+        let mut e = engine_with_clip(2_000);
+        let a = e.snapshot().selected_clip_id.unwrap();
+        e.add_clip("b.mp4", 2_000);
+        let b = e.snapshot().selected_clip_id.unwrap();
+        command(&mut e, serde_json::json!({"action":"shift", "clip_ids":[a,b], "delta_ms":1000}));
+        assert_eq!(clips(&e), vec![(1000,0,2000),(3000,0,2000)]);
+        let before = e.save_json().unwrap();
+        command(&mut e, serde_json::json!({"action":"duplicate", "clip_ids":[a,b]}));
+        assert_eq!(clips(&e), vec![(1000,0,2000),(3000,0,2000),(5000,0,2000),(7000,0,2000)]);
+        e.undo(); assert_eq!(e.save_json().unwrap(), before);
+        command(&mut e, serde_json::json!({"action":"delete", "clip_ids":[a], "ripple":false}));
+        assert_eq!(clips(&e), vec![(3000,0,2000)]);
+        e.undo();
+        command(&mut e, serde_json::json!({"action":"delete", "clip_ids":[a], "ripple":true}));
+        assert_eq!(clips(&e), vec![(1000,0,2000)]);
+        e.undo();
+        for edit in [serde_json::json!({"action":"shift","clip_ids":[a],"delta_ms":500}),
+            serde_json::json!({"action":"shift","clip_ids":[a,b],"delta_ms":-2000}),
+            serde_json::json!({"action":"delete","clip_ids":[a,"missing"],"ripple":true})] {
+            e.apply_timeline_edit(&edit.to_string());
+            assert!(e.snapshot().last_error.is_some());
+            assert_eq!(e.save_json().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn locks_refuse_batches_and_track_reordering_is_persistent() {
+        let mut e = engine_with_clip(2_000);
+        let video = e.snapshot().selected_clip_id.unwrap();
+        e.add_timeline_media("a.wav", 2_000, MediaKind::Audio, false);
+        let audio = e.snapshot().selected_clip_id.unwrap();
+        let order: Vec<_> = e.project.tracks.iter().rev().map(|t| t.id.clone()).collect();
+        command(&mut e, serde_json::json!({"action":"reorder_tracks","track_ids":order}));
+        let saved = e.save_json().unwrap();
+        e.undo(); assert_eq!(e.project.tracks[0].kind, TrackKind::Video);
+        e.redo(); assert_eq!(e.save_json().unwrap(), saved);
+        e.open_json(&saved); assert_eq!(e.project.tracks[0].kind, TrackKind::Audio);
+        e.set_track_locked(TrackKind::Audio, true);
+        let before = e.save_json().unwrap();
+        for edit in [serde_json::json!({"action":"delete","clip_ids":[video,audio],"ripple":true}),
+            serde_json::json!({"action":"duplicate","clip_ids":[video,audio]}),
+            serde_json::json!({"action":"reorder_tracks","track_ids":[order[1],order[0]]})] {
+            e.apply_timeline_edit(&edit.to_string());
+            assert!(e.snapshot().last_error.is_some());
+            assert_eq!(e.save_json().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn secondary_overlap_saves_reopens_and_preserves_neighbors() {
+        for (kind, overlay) in [(MediaKind::Audio, false), (MediaKind::Image, false), (MediaKind::Image, true)] {
+            let mut e = engine_with_clip(10_000);
+            e.add_timeline_media("one", 4_000, kind, overlay);
+            let first = e.snapshot().selected_clip_id.unwrap();
+            e.add_timeline_media("two", 4_000, kind, overlay);
+            let second = e.snapshot().selected_clip_id.unwrap();
+            command(&mut e, serde_json::json!({"action":"shift", "clip_ids":[second], "delta_ms":-3_000}));
+            assert_eq!(e.project.find_clip(&second).unwrap().1.timeline_start_ms, 1_000);
+            let saved = e.save_json().unwrap();
+            e.undo();
+            assert_eq!(e.project.find_clip(&second).unwrap().1.timeline_start_ms, 4_000);
+            e.redo();
+            assert_eq!(e.save_json().unwrap(), saved);
+            e.open_json(&saved);
+            assert_eq!(e.snapshot().last_error, None);
+            e.select(Some(&first));
+            e.trim_selected(0, 500);
+            assert_eq!(e.project.find_clip(&second).unwrap().1.timeline_start_ms, 1_000);
+            e.delete_selected();
+            assert_eq!(e.project.find_clip(&second).unwrap().1.timeline_start_ms, 1_000);
+        }
+    }
+
+    #[test]
+    fn invalid_properties_and_overlaps_do_not_change_history() {
+        let mut e = engine_with_clip(2_000);
+        let a = e.snapshot().selected_clip_id.unwrap();
+        e.add_clip("b.mp4", 2000);
+        let before = e.save_json().unwrap();
+        let history = e.undo.len();
+        for properties in [ClipProperties { scale: 0.0, ..Default::default() },
+            ClipProperties { crop_left: 0.5, crop_right: 0.5, ..Default::default() },
+            ClipProperties { volume: 1.1, ..Default::default() }] {
+            e.apply_timeline_edit(&serde_json::json!({"action":"properties", "clip_id":a,
+                "start_ms":0, "duration_ms":2000, "properties":properties}).to_string());
+            assert!(e.snapshot().last_error.is_some());
+            assert_eq!(e.save_json().unwrap(), before);
+            assert_eq!(e.undo.len(), history);
+        }
+        e.apply_timeline_edit(&serde_json::json!({"action":"properties", "clip_id":a,
+            "start_ms":1000, "duration_ms":2000, "properties":ClipProperties::default()}).to_string());
+        assert!(e.snapshot().last_error.is_some());
+        assert_eq!(e.save_json().unwrap(), before);
+    }
 
     #[test]
     fn mute_is_undoable_and_survives_save_open() {

@@ -17,16 +17,18 @@ class ProjectDraft {
   final String json;
 
   /// Read-only display metadata. Malformed drafts can still be listed/deleted.
-  (String, int)? get firstFrame {
+  (String, int, String)? get firstFrame {
     try {
       final project = jsonDecode(json) as Map<String, dynamic>;
       final tracks = project['tracks'] as List;
-      final clips = tracks.expand((t) => (t as Map)['clips'] as List);
+      final assets = {for (final a in (project['assets'] as List).cast<Map>()) a['id']: a};
+      final clips = tracks.expand((t) => (t as Map)['clips'] as List).cast<Map>();
       if (clips.isEmpty) return null;
-      final clip = clips.first as Map;
-      final asset = (project['assets'] as List).cast<Map>()
-          .firstWhere((a) => a['id'] == clip['asset_id']);
-      return (asset['path'] as String, (clip['source_in_ms'] as num).toInt());
+      final clip = clips.firstWhere((c) => assets[c['asset_id']]?['kind'] != 'Audio',
+          orElse: () => clips.first);
+      final asset = assets[clip['asset_id']]!;
+      final kind = (asset['kind'] as String? ?? 'Video').toLowerCase();
+      return (asset['path'] as String, (clip['source_in_ms'] as num).toInt(), kind);
     } catch (_) { return null; }
   }
 
@@ -119,11 +121,11 @@ class ProjectSession implements EditorEngine {
 
   Future<void> _persist(EditorState state, {bool allowEmpty = false}) async {
     await _loadLibrary();
-    if (_activeId == null && state.clips.isEmpty && !allowEmpty) return;
+    if (_activeId == null && !state.hasMedia && !allowEmpty) return;
     final id = _activeId ?? _newId();
     final index = _drafts!.indexWhere((d) => d.id == id);
     final name = index >= 0 ? _drafts![index].name
-        : state.clips.isEmpty ? 'Untitled video' : state.clips.first.name;
+        : !state.hasMedia ? 'Untitled video' : state.allClips.first.name;
     final updated = ProjectDraft(id: id, name: name,
         updatedAt: DateTime.now(), json: await _json());
     final next = List<ProjectDraft>.of(_drafts!);
@@ -226,6 +228,9 @@ class ProjectSession implements EditorEngine {
   });
 
   @override
+  Future<EditorState> applyTimelineEdit(Map<String, dynamic> edit) => _change(() => engine.applyTimelineEdit(edit));
+
+  @override
   Future<EditorState> newProject() => _enqueue(() async {
     await _preserveUnsaved();
     await _loadLibrary();
@@ -245,6 +250,9 @@ class ProjectSession implements EditorEngine {
   Future<EditorState> setMuted(bool muted) =>
       _change(() => engine.setMuted(muted));
   @override
+  Future<EditorState> setTrackLocked(String kind, bool locked) =>
+      _change(() => engine.setTrackLocked(kind, locked));
+  @override
   Future<EditorState> moveSelected(int targetIndex) =>
       _change(() => engine.moveSelected(targetIndex));
   @override
@@ -255,6 +263,9 @@ class ProjectSession implements EditorEngine {
     required String path,
     required int durationMs,
   }) => _change(() => engine.addClip(path: path, durationMs: durationMs));
+  @override
+  Future<EditorState> addTimelineMedia({required String path, required int durationMs, required String kind}) =>
+      _change(() => engine.addTimelineMedia(path: path, durationMs: durationMs, kind: kind));
   @override
   Future<EditorState> splitSelectedAt(int timelineMs) =>
       _change(() => engine.splitSelectedAt(timelineMs));
@@ -267,6 +278,8 @@ class ProjectSession implements EditorEngine {
   );
   @override
   Future<EditorState> deleteSelected() => _change(engine.deleteSelected);
+  @override
+  Future<EditorState> duplicateSelected() => _change(engine.duplicateSelected);
   @override
   Future<EditorState> undo() => _change(engine.undo);
   @override

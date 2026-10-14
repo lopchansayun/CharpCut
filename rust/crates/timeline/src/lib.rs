@@ -6,7 +6,7 @@ pub type Millis = u64;
 
 /// Version written into every saved project. Bump when the on-disk shape changes
 /// in a way older builds cannot read, and add a migration in [`Project::from_json`].
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Shortest clip the editor will create by splitting or trimming.
 pub const MIN_CLIP_MS: Millis = 100;
@@ -33,13 +33,18 @@ pub struct MediaAsset {
     pub id: String,
     pub path: String,
     pub duration_ms: Millis,
+    pub kind: MediaKind,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MediaKind { Video, Audio, Image }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Track {
     pub id: String,
     pub kind: TrackKind,
     pub muted: bool,
+    pub locked: bool,
     pub clips: Vec<Clip>,
 }
 
@@ -47,7 +52,32 @@ pub struct Track {
 pub enum TrackKind {
     Video,
     Audio,
+    Image,
     Overlay,
+}
+
+/// Normalized canvas translation/crop, degrees, and unit-range opacity/volume.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClipProperties {
+    pub x: f64, pub y: f64, pub scale: f64, pub rotation: f64,
+    pub crop_left: f64, pub crop_top: f64, pub crop_right: f64, pub crop_bottom: f64,
+    pub opacity: f64, pub volume: f64,
+}
+impl Default for ClipProperties {
+    fn default() -> Self { Self { x: 0.0, y: 0.0, scale: 1.0, rotation: 0.0,
+        crop_left: 0.0, crop_top: 0.0, crop_right: 0.0, crop_bottom: 0.0,
+        opacity: 1.0, volume: 1.0 } }
+}
+impl ClipProperties {
+    pub fn valid(&self) -> bool {
+        let values = [self.x, self.y, self.scale, self.rotation, self.crop_left,
+            self.crop_top, self.crop_right, self.crop_bottom, self.opacity, self.volume];
+        values.iter().all(|v| v.is_finite()) && self.x.abs() <= 2.0 && self.y.abs() <= 2.0
+            && (0.1..=10.0).contains(&self.scale) && self.rotation.abs() <= 180.0
+            && [self.crop_left, self.crop_top, self.crop_right, self.crop_bottom,
+                self.opacity, self.volume].iter().all(|v| (0.0..=1.0).contains(v))
+            && self.crop_left + self.crop_right < 1.0 && self.crop_top + self.crop_bottom < 1.0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +87,7 @@ pub struct Clip {
     pub timeline_start_ms: Millis,
     pub source_in_ms: Millis,
     pub duration_ms: Millis,
+    pub properties: ClipProperties,
 }
 
 impl Clip {
@@ -104,13 +135,19 @@ impl Project {
 
     pub fn add_track(&mut self, kind: TrackKind) -> String {
         let id = Uuid::new_v4().to_string();
-        self.tracks.push(Track { id: id.clone(), kind, muted: false, clips: Vec::new() });
+        self.tracks.push(Track { id: id.clone(), kind, muted: false, locked: false, clips: Vec::new() });
         id
     }
 
     pub fn add_asset(&mut self, path: impl Into<String>, duration_ms: Millis) -> String {
         let id = Uuid::new_v4().to_string();
-        self.assets.push(MediaAsset { id: id.clone(), path: path.into(), duration_ms });
+        self.assets.push(MediaAsset { id: id.clone(), path: path.into(), duration_ms, kind: MediaKind::Video });
+        id
+    }
+
+    pub fn add_media_asset(&mut self, path: impl Into<String>, duration_ms: Millis, kind: MediaKind) -> String {
+        let id = Uuid::new_v4().to_string();
+        self.assets.push(MediaAsset { id: id.clone(), path: path.into(), duration_ms, kind });
         id
     }
 
@@ -135,6 +172,11 @@ impl Project {
 
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
+        let compatible = matches!((&track.kind, asset.kind),
+            (TrackKind::Video, MediaKind::Video) | (TrackKind::Audio, MediaKind::Audio) |
+            (TrackKind::Image, MediaKind::Image) | (TrackKind::Overlay, MediaKind::Image));
+        if !compatible { return Err(TimelineError::InvalidProject("media type does not match track".into())); }
 
         let id = Uuid::new_v4().to_string();
         track.clips.push(Clip {
@@ -143,6 +185,7 @@ impl Project {
             timeline_start_ms,
             source_in_ms,
             duration_ms,
+            properties: ClipProperties::default(),
         });
         track.clips.sort_by_key(|c| c.timeline_start_ms);
         Ok(id)
@@ -161,6 +204,7 @@ impl Project {
 
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         let clip = track.clips.iter_mut().find(|c| c.id == clip_id)
             .ok_or(TimelineError::ClipNotFound)?;
         let asset = self.assets.iter().find(|a| a.id == clip.asset_id)
@@ -183,6 +227,7 @@ impl Project {
     ) -> Result<(), TimelineError> {
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         let clip = track.clips.iter_mut().find(|c| c.id == clip_id)
             .ok_or(TimelineError::ClipNotFound)?;
         clip.timeline_start_ms = new_timeline_start_ms;
@@ -194,6 +239,7 @@ impl Project {
     pub fn reorder_clip(&mut self, track_id: &str, clip_id: &str, target_index: usize) -> Result<(), TimelineError> {
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         let index = track.clips.iter().position(|c| c.id == clip_id)
             .ok_or(TimelineError::ClipNotFound)?;
         if target_index >= track.clips.len() {
@@ -214,9 +260,31 @@ impl Project {
     pub fn delete_clip(&mut self, track_id: &str, clip_id: &str) -> Result<Clip, TimelineError> {
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         let index = track.clips.iter().position(|c| c.id == clip_id)
             .ok_or(TimelineError::ClipNotFound)?;
         Ok(track.clips.remove(index))
+    }
+
+    /// Inserts an independent copy immediately after a clip and closes the track.
+    pub fn duplicate_clip(&mut self, track_id: &str, clip_id: &str) -> Result<String, TimelineError> {
+        let track = self.tracks.iter_mut().find(|t| t.id == track_id)
+            .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
+        let index = track.clips.iter().position(|c| c.id == clip_id)
+            .ok_or(TimelineError::ClipNotFound)?;
+        let mut copy = track.clips[index].clone();
+        copy.id = Uuid::new_v4().to_string();
+        let id = copy.id.clone();
+        copy.timeline_start_ms = copy.timeline_start_ms.checked_add(copy.duration_ms)
+            .ok_or_else(|| TimelineError::InvalidProject("timeline too long".into()))?;
+        for later in &mut track.clips[index + 1..] {
+            if track.kind != TrackKind::Video { break; }
+            later.timeline_start_ms = later.timeline_start_ms.checked_add(copy.duration_ms)
+                .ok_or_else(|| TimelineError::InvalidProject("timeline too long".into()))?;
+        }
+        track.clips.insert(index + 1, copy);
+        Ok(id)
     }
 
     pub fn split_clip(
@@ -227,6 +295,7 @@ impl Project {
     ) -> Result<(String, String), TimelineError> {
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         let index = track.clips.iter().position(|c| c.id == clip_id)
             .ok_or(TimelineError::ClipNotFound)?;
         let original = track.clips[index].clone();
@@ -289,6 +358,7 @@ impl Project {
     pub fn ripple_track(&mut self, track_id: &str) -> Result<(), TimelineError> {
         let track = self.tracks.iter_mut().find(|t| t.id == track_id)
             .ok_or(TimelineError::TrackNotFound)?;
+        if track.locked { return Err(TimelineError::InvalidProject("track is locked".into())); }
         track.clips.sort_by_key(|c| c.timeline_start_ms);
         let mut cursor = 0;
         for clip in &mut track.clips {
@@ -345,10 +415,19 @@ impl Project {
                 let Some(asset) = self.assets.iter().find(|a| a.id == clip.asset_id) else {
                     return bad(format!("clip {} points at a missing asset", clip.id));
                 };
+                let compatible = matches!((&track.kind, asset.kind),
+                    (TrackKind::Video, MediaKind::Video) | (TrackKind::Audio, MediaKind::Audio) |
+                    (TrackKind::Image, MediaKind::Image) | (TrackKind::Overlay, MediaKind::Image));
+                if !compatible { return bad(format!("clip {} has media on the wrong track", clip.id)); }
+                if !clip.properties.valid() { return bad("invalid clip properties".into()); }
+                if clip.timeline_start_ms.checked_add(clip.duration_ms).is_none()
+                    || clip.source_in_ms.checked_add(clip.duration_ms).is_none() {
+                    return bad("clip duration is too large".into());
+                }
                 if clip.duration_ms == 0 || clip.source_out_ms() > asset.duration_ms {
                     return bad(format!("clip {} is outside its source media", clip.id));
                 }
-                if clip.timeline_start_ms < previous_end {
+                if track.kind == TrackKind::Video && clip.timeline_start_ms < previous_end {
                     return bad(format!("clip {} overlaps the previous clip", clip.id));
                 }
                 previous_end = clip.timeline_end_ms();
@@ -379,8 +458,27 @@ impl Project {
             if let Some(tracks) = value["tracks"].as_array_mut() {
                 for track in tracks { track["muted"] = serde_json::Value::Bool(false); }
             }
+        }
+        if probe.version < 3 {
+            if let Some(assets) = value["assets"].as_array_mut() {
+                for asset in assets { asset["kind"] = serde_json::Value::String("Video".into()); }
+            }
+            if let Some(tracks) = value["tracks"].as_array_mut() {
+                for track in tracks { track["locked"] = serde_json::Value::Bool(false); }
+            }
             value["version"] = serde_json::Value::from(SCHEMA_VERSION);
         }
+        if probe.version < 4 {
+            if let Some(tracks) = value["tracks"].as_array_mut() {
+                for track in tracks {
+                    if let Some(clips) = track["clips"].as_array_mut() {
+                        for clip in clips { clip["properties"] = serde_json::to_value(ClipProperties::default()).unwrap(); }
+                    }
+                }
+            }
+            value["version"] = serde_json::Value::from(SCHEMA_VERSION);
+        }
+        value["version"] = serde_json::Value::from(SCHEMA_VERSION);
         let project: Project = serde_json::from_value(value).map_err(|e| TimelineError::Json(e.to_string()))?;
         project.validate()?;
         Ok(project)
@@ -399,7 +497,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_one_migrates_to_unmuted_version_two() {
+    fn version_one_migrates_to_unmuted_current_schema() {
         let (p, _, _, _) = sample();
         let mut value = serde_json::to_value(&p).unwrap();
         value["version"] = 1.into();
@@ -411,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn version_two_requires_a_valid_mute_field() {
+    fn current_schema_requires_a_valid_mute_field() {
         let (p, _, _, _) = sample();
         let mut value = serde_json::to_value(&p).unwrap();
         value["tracks"][0].as_object_mut().unwrap().remove("muted");

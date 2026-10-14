@@ -1,27 +1,46 @@
+import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'engine/editor_state.dart';
+import 'preview_layer_controls.dart';
+import 'timeline_layers.dart';
 
-/// Read-only renderer of Rust snapshot ranges. Zoom and fit affect viewing only.
+/// Renders Rust snapshot ranges with local gesture drafts committed on release.
 class VideoPreview extends StatefulWidget {
-  const VideoPreview({super.key, required this.state, required this.playing,
-    required this.seekSerial, required this.onPosition, required this.onError});
+  const VideoPreview({
+    super.key,
+    required this.state,
+    required this.playing,
+    this.playbackOnly = false,
+    required this.seekSerial,
+    required this.onPosition,
+    required this.onError,
+    required this.onSelect,
+    required this.onCommit,
+    required this.onDelete,
+  });
   final EditorState state;
   final bool playing;
+  final bool playbackOnly;
   final int seekSerial;
   final void Function(int positionMs, bool playing) onPosition;
   final ValueChanged<String> onError;
-
+  final ValueChanged<String?> onSelect;
+  final Future<void> Function(EditorClip clip, ClipProperties properties)
+  onCommit;
+  final ValueChanged<EditorClip> onDelete;
   @override
   State<VideoPreview> createState() => _VideoPreviewState();
 }
 
 class _VideoPreviewState extends State<VideoPreview> {
   final _transform = TransformationController();
+  final _drafts = <String, ClipProperties>{};
   MethodChannel? _channel;
   int _revision = 0;
   int? _sentSeek;
@@ -32,30 +51,68 @@ class _VideoPreviewState extends State<VideoPreview> {
   bool _hasFrame = false;
   bool _buffering = false;
   bool _gap = false;
-  bool _sourceFit = true;
   double _sourceAspect = 0;
   String? _error;
 
   String _clipSignature(EditorState state) => jsonEncode({
     'duration': state.totalDurationMs,
-    'clips': [for (final clip in state.clips)
-      [clip.id, clip.path, clip.startMs, clip.sourceInMs, clip.durationMs]],
+    'clips': [
+      for (final clip in state.clips)
+        [clip.id, clip.path, clip.startMs, clip.sourceInMs, clip.durationMs],
+    ],
+    'audio': [
+      for (final clip in state.audioClips)
+        [clip.id, clip.path, clip.startMs, clip.sourceInMs, clip.durationMs],
+    ],
+    'images': [
+      for (final clip in state.imageClips)
+        [clip.id, clip.path, clip.startMs, clip.durationMs],
+    ],
+    'overlays': [
+      for (final clip in state.overlayClips)
+        [clip.id, clip.path, clip.startMs, clip.durationMs],
+    ],
   });
 
   @override
   void didUpdateWidget(VideoPreview old) {
     super.didUpdateWidget(old);
-    final changed = _clipSignature(old.state) != _clipSignature(widget.state);
-    if (changed) { _hasFrame = false; _error = null; }
-    if (changed || old.seekSerial != widget.seekSerial || old.playing != widget.playing ||
-        old.state.mainTrackMuted != widget.state.mainTrackMuted) {
+    if (widget.playbackOnly && !old.playbackOnly) {
+      _transform.value = Matrix4.identity();
+      _drafts.clear();
+    }
+    final sameProject =
+        identical(old.state.clips, widget.state.clips) &&
+        identical(old.state.audioClips, widget.state.audioClips) &&
+        identical(old.state.imageClips, widget.state.imageClips) &&
+        identical(old.state.overlayClips, widget.state.overlayClips);
+    final changed =
+        !sameProject &&
+        _clipSignature(old.state) != _clipSignature(widget.state);
+    if (changed) {
+      _hasFrame = false;
+      _error = null;
+      _sourceAspect = 0;
+    }
+    if (changed ||
+        old.seekSerial != widget.seekSerial ||
+        old.playing != widget.playing ||
+        old.state.mainTrackMuted != widget.state.mainTrackMuted ||
+        (!sameProject &&
+            jsonEncode([
+                  for (final c in old.state.allClips) c.properties.volume,
+                ]) !=
+                jsonEncode([
+                  for (final c in widget.state.allClips) c.properties.volume,
+                ]))) {
       _revision++;
       _scheduleUpdate();
     }
   }
 
   void _created(int id) {
-    _channel = MethodChannel('charpcut/preview/$id')..setMethodCallHandler(_nativeEvent);
+    _channel = MethodChannel('charpcut/preview/$id')
+      ..setMethodCallHandler(_nativeEvent);
     _revision++;
     _scheduleUpdate();
   }
@@ -69,22 +126,35 @@ class _VideoPreviewState extends State<VideoPreview> {
     final buffering = data['buffering'] == true;
     final gap = data['gap'] == true;
     final aspect = (data['aspect_ratio'] as num?)?.toDouble() ?? 0;
-    if (error != _error || hasFrame != _hasFrame || buffering != _buffering ||
-        gap != _gap || (aspect > 0 && aspect != _sourceAspect)) {
+    if (error != _error ||
+        hasFrame != _hasFrame ||
+        buffering != _buffering ||
+        gap != _gap ||
+        (aspect > 0 && aspect != _sourceAspect)) {
       final newError = error != null && error != _error;
       setState(() {
-        _error = error; _hasFrame = hasFrame; _buffering = buffering; _gap = gap;
+        _error = error;
+        _hasFrame = hasFrame;
+        _buffering = buffering;
+        _gap = gap;
         if (aspect.isFinite && aspect > 0) _sourceAspect = aspect;
       });
-      if (newError) widget.onError(error!);
+      if (newError) widget.onError(error);
     }
     if (error == null) {
-      widget.onPosition((data['position_ms'] as num).toInt(), data['playing'] == true);
+      widget.onPosition(
+        (data['position_ms'] as num).toInt(),
+        data['playing'] == true,
+      );
     }
   }
 
   void _retry() {
-    setState(() { _error = null; _hasFrame = false; _buffering = true; });
+    setState(() {
+      _error = null;
+      _hasFrame = false;
+      _buffering = true;
+    });
     _retrySerial++;
     _revision++;
     _scheduleUpdate();
@@ -107,33 +177,56 @@ class _VideoPreviewState extends State<VideoPreview> {
         _sentRetry = retry;
         try {
           await _channel!.invokeMethod<void>('update', {
-            'revision': revision, 'duration_ms': widget.state.totalDurationMs,
+            'revision': revision,
+            'duration_ms': widget.state.totalDurationMs,
             'position_ms': widget.state.playheadMs,
-            'seek': _sentSeek != seek, 'retry': retryRequested,
-            'playing': widget.playing, 'muted': widget.state.mainTrackMuted,
-            'clips': [for (final clip in widget.state.clips) {
-              'id': clip.id, 'path': clip.path, 'start_ms': clip.startMs,
-              'source_in_ms': clip.sourceInMs, 'duration_ms': clip.durationMs,
-            }],
+            'seek': _sentSeek != seek,
+            'retry': retryRequested,
+            'playing': widget.playing,
+            'muted': widget.state.mainTrackMuted,
+            'clip_volumes': {
+              for (final c in widget.state.clips) c.id: c.properties.volume,
+            },
+            'audio_volumes': {
+              for (final c in widget.state.audioClips)
+                c.id: c.properties.volume,
+            },
+            'clips': [
+              for (final clip in widget.state.clips)
+                {
+                  'id': clip.id,
+                  'path': clip.path,
+                  'start_ms': clip.startMs,
+                  'source_in_ms': clip.sourceInMs,
+                  'duration_ms': clip.durationMs,
+                },
+            ],
+            'audio_clips': [
+              for (final clip in widget.state.audioClips)
+                {
+                  'id': clip.id,
+                  'path': clip.path,
+                  'start_ms': clip.startMs,
+                  'source_in_ms': clip.sourceInMs,
+                  'duration_ms': clip.durationMs,
+                },
+            ],
           });
           _sentSeek = seek;
           _sentRetry = retry;
         } catch (error) {
           if (mounted && revision == _revision) {
             final message = error is PlatformException
-                ? error.message ?? 'Could not load preview' : 'Could not load preview: $error';
+                ? error.message ?? 'Could not load preview'
+                : 'Could not load preview: $error';
             setState(() => _error = message);
             widget.onError(message);
           }
         }
       }
-    } finally { _sending = false; }
-  }
-
-  void _zoom(double amount, Size size) {
-    final scale = (_transform.value.getMaxScaleOnAxis() + amount).clamp(1.0, 4.0).toDouble();
-    _transform.value = Matrix4.diagonal3Values(scale, scale, 1)
-      ..setTranslationRaw((1 - scale) * size.width / 2, (1 - scale) * size.height / 2, 0);
+    } finally {
+      _sending = false;
+    }
   }
 
   @override
@@ -146,65 +239,225 @@ class _VideoPreviewState extends State<VideoPreview> {
   @override
   Widget build(BuildContext context) {
     if (defaultTargetPlatform != TargetPlatform.android) {
-      return const Center(child: Text('Video preview is available on Android', textAlign: TextAlign.center));
-    }
-    return Column(children: [
-      Expanded(child: LayoutBuilder(builder: (context, bounds) {
-        final aspect = _sourceFit && !_gap && _sourceAspect > 0
-            ? _sourceAspect : widget.state.projectAspectRatio;
-        final width = bounds.maxWidth < bounds.maxHeight * aspect ? bounds.maxWidth : bounds.maxHeight * aspect;
-        final size = Size(width, width / aspect);
-        return Stack(fit: StackFit.expand, children: [
-          Center(child: SizedBox(width: size.width, height: size.height,
-            child: ClipRect(child: GestureDetector(
-              onDoubleTap: () { _transform.value = Matrix4.identity(); },
-              child: InteractiveViewer(
-                transformationController: _transform, minScale: 1, maxScale: 4,
-                child: Stack(fit: StackFit.expand, children: [
-                  IgnorePointer(child: AndroidView(viewType: 'charpcut/video-preview', onPlatformViewCreated: _created)),
-                  if (_gap) const ColoredBox(color: Colors.black),
-                ]),
-              ),
-            )),
-          )),
-          if (_error != null) ColoredBox(color: Colors.black, child: Center(child: SingleChildScrollView(
-            child: Padding(padding: const EdgeInsets.all(16), child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.error_outline, color: Colors.white70),
-              const SizedBox(height: 8),
-              Text(_error!, textAlign: TextAlign.center),
-              TextButton.icon(onPressed: _retry, icon: const Icon(Icons.refresh), label: const Text('Retry preview')),
-            ])),
-          ))),
-          if (_error == null && (_buffering || (!_hasFrame && !_gap)))
-            const IgnorePointer(child: Center(child: CircularProgressIndicator())),
-          if (_error == null) Positioned(right: 4, bottom: 4, child: DecoratedBox(
-            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(tooltip: 'Zoom out', onPressed: () => _zoom(-.5, size), icon: const Icon(Icons.remove)),
-              ValueListenableBuilder<Matrix4>(valueListenable: _transform, builder: (context, value, _) =>
-                Tooltip(message: 'Reset zoom', child: TextButton(onPressed: () { _transform.value = Matrix4.identity(); },
-                  child: Text('${value.getMaxScaleOnAxis().toStringAsFixed(1)}x')))),
-              IconButton(tooltip: 'Zoom in', onPressed: () => _zoom(.5, size), icon: const Icon(Icons.add)),
-            ]),
-          )),
-        ]);
-      })),
-      SizedBox(height: 36, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        PopupMenuButton<bool>(
-          tooltip: 'Preview fit', initialValue: _sourceFit,
-          onSelected: (value) {
-            _transform.value = Matrix4.identity();
-            setState(() { _sourceFit = value; });
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: true, child: Text('Fit source video')),
-            PopupMenuItem(value: false, child: Text('Fit project canvas')),
-          ],
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(_sourceFit ? 'Source fit' : 'Project canvas')),
+      return const Center(
+        child: Text(
+          'Video preview is available on Android',
+          textAlign: TextAlign.center,
         ),
-        const Flexible(child: Text('Pinch to zoom / drag to pan', style: TextStyle(fontSize: 11, color: Colors.white54))),
-      ])),
-    ]);
+      );
+    }
+    final visualClips = activeVisualClips(widget.state);
+    final hasStill = visualClips.any((c) => c.kind == 'image');
+    final selectedVisible =
+        !widget.playbackOnly &&
+        !widget.playing &&
+        visualClips.any((c) => c.id == widget.state.selectedClipId);
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final aspect = widget.state.projectAspectRatio;
+        final width = bounds.maxWidth < bounds.maxHeight * aspect
+            ? bounds.maxWidth
+            : bounds.maxHeight * aspect;
+        final size = Size(width, width / aspect);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: SizedBox(
+                width: size.width,
+                height: size.height,
+                child: ClipRect(
+                  child: GestureDetector(
+                    onDoubleTap: widget.playbackOnly
+                        ? null
+                        : () {
+                            _transform.value = Matrix4.identity();
+                          },
+                    child: InteractiveViewer(
+                      transformationController: _transform,
+                      minScale: 1,
+                      maxScale: 4,
+                      panEnabled: !widget.playbackOnly && !selectedVisible,
+                      scaleEnabled: !widget.playbackOnly && !selectedVisible,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          // Keep the platform view mounted even during a gap.
+                          for (final layer in previewLayers(
+                            widget.state,
+                            visualClips,
+                          ))
+                            ClipVisual(
+                              key: ValueKey(
+                                layer == null || layer.trackKind == 'video'
+                                    ? 'main-video'
+                                    : layer.id,
+                              ),
+                              properties:
+                                  _drafts[layer?.id] ??
+                                  layer?.properties ??
+                                  const ClipProperties(),
+                              visible:
+                                  layer != null &&
+                                  (layer.trackKind != 'video' || !_gap),
+                              child: layer == null || layer.trackKind == 'video'
+                                  ? Center(
+                                      child: AspectRatio(
+                                        aspectRatio: _sourceAspect > 0
+                                            ? _sourceAspect
+                                            : aspect,
+                                        child: IgnorePointer(
+                                          child: AndroidView(
+                                            key: const ValueKey('main-video'),
+                                            viewType: 'charpcut/video-preview',
+                                            onPlatformViewCreated: _created,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : Image.file(
+                                      File(layer.path),
+                                      fit: BoxFit.contain,
+                                      cacheWidth: widget.state.projectWidth
+                                          .clamp(1, 2048)
+                                          .toInt(),
+                                      errorBuilder: (_, error, __) => Center(
+                                        child: Text(
+                                          'Could not show image: $error',
+                                        ),
+                                      ),
+                                    ),
+                            ),
+                          if (!widget.playbackOnly)
+                            PreviewLayerControls(
+                              clips: visualClips,
+                              selectedId: selectedVisible
+                                  ? widget.state.selectedClipId
+                                  : null,
+                              locked: widget.state.tracks
+                                  .where((t) => t.locked)
+                                  .map((t) => t.id)
+                                  .toSet(),
+                              onSelect: widget.onSelect,
+                              onCommit: widget.onCommit,
+                              onDelete: widget.onDelete,
+                              onDraft: (id, p) => setState(() {
+                                if (p == null) {
+                                  _drafts.remove(id);
+                                } else {
+                                  _drafts[id] = p;
+                                }
+                              }),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (!widget.playbackOnly)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: PopupMenuButton<String>(
+                  tooltip: 'Select layer',
+                  icon: const Icon(Icons.layers_outlined),
+                  onSelected: (id) => widget.onSelect(id.isEmpty ? null : id),
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: '', child: Text('Deselect')),
+                    for (final c in visualClips.reversed)
+                      PopupMenuItem(
+                        value: c.id,
+                        child: Text('${c.trackKind}: ${c.name}'),
+                      ),
+                  ],
+                ),
+              ),
+            if (_error != null)
+              ColoredBox(
+                color: Colors.black,
+                child: Center(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Colors.white70,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(_error!, textAlign: TextAlign.center),
+                          TextButton.icon(
+                            onPressed: _retry,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Retry preview'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (_error == null &&
+                (_buffering || (!_hasFrame && !_gap && !hasStill)))
+              const IgnorePointer(
+                child: Center(child: CircularProgressIndicator()),
+              ),
+          ],
+        );
+      },
+    );
   }
+}
+
+/// Saved canvas edits are applied inside the independent pinch-zoom viewport.
+class ClipVisual extends StatelessWidget {
+  const ClipVisual({
+    super.key,
+    required this.properties,
+    required this.child,
+    this.visible = true,
+  });
+  final ClipProperties properties;
+  final Widget child;
+  final bool visible;
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, bounds) {
+      final p = properties;
+      return Opacity(
+        opacity: visible ? p.opacity : 0,
+        child: Transform.translate(
+          offset: Offset(p.x * bounds.maxWidth, p.y * bounds.maxHeight),
+          child: Transform.rotate(
+            angle: p.rotation * math.pi / 180,
+            child: Transform.scale(
+              scale: p.scale,
+              child: ClipRect(
+                clipper: _CanvasCrop(p),
+                child: SizedBox.expand(child: child),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _CanvasCrop extends CustomClipper<Rect> {
+  _CanvasCrop(this.p);
+  final ClipProperties p;
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(
+    size.width * p.cropLeft,
+    size.height * p.cropTop,
+    size.width * (1 - p.cropRight),
+    size.height * (1 - p.cropBottom),
+  );
+  @override
+  bool shouldReclip(_CanvasCrop old) => old.p != p;
 }

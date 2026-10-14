@@ -397,8 +397,6 @@ class _ProjectsTab extends StatelessWidget {
         const Text('Projects', style: TextStyle(fontSize: 24,
             fontWeight: FontWeight.w800, color: homeInk)),
         const SizedBox(height: 12),
-        const Text('Each video has its own autosaved draft on this device. Tap a draft to continue, or use its menu to rename, duplicate or delete it.'),
-        const SizedBox(height: 12),
         FilledButton.icon(onPressed: () => _openEditor(context),
             icon: const Icon(Icons.add), label: const Text('New video')),
         const SizedBox(height: 12),
@@ -471,6 +469,7 @@ class _BottomNav extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       _items[i].$2,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: i == index ? FontWeight.w700 : FontWeight.w500,

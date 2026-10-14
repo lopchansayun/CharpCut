@@ -45,7 +45,7 @@ void main() {
       await session.save();
       final restored = ProjectSession(FakeEngine(), store);
       final state = await restored.openProjectJson(
-        store.data[ProjectSlot.saved]!,
+        (await session.listDrafts()).single.json,
       );
       expect(state.mainTrackMuted, true);
       expect(state.clips.map((c) => c.name), ['B', 'A']);
@@ -67,6 +67,7 @@ void main() {
 
   testWidgets('Mute updates engine state and Undo restores it', (tester) async {
     final fake = FakeEngine();
+    await phoneSurface(tester);
     await tester.pumpWidget(
       EngineScope(previewEnabled: false,
         engine: fake,
@@ -87,15 +88,9 @@ void main() {
     tester,
   ) async {
     var picks = 0;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-          VideoImporter.channel,
-          (_) async => {
-            'path': '${picks++ == 0 ? 'a' : 'b'}.mp4',
-            'duration_ms': 3000,
-          },
-        );
+    mockMediaImport(() async => {'path': '${picks++ == 0 ? 'a' : 'b'}.mp4', 'duration_ms': 3000});
     final fake = FakeEngine();
+    await phoneSurface(tester);
     await tester.pumpWidget(
       EngineScope(previewEnabled: false,
         engine: fake,
@@ -103,12 +98,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Move'));
-    await tester.pumpAndSettle();
+    await addVideo(tester);
+    await addVideo(tester);
+    await tapTool(tester, 'Move');
     await tester.tap(find.text('Position 1: A'));
     await tester.pumpAndSettle();
     expect((await fake.getState()).clips.map((c) => c.name), ['B', 'A']);
@@ -120,13 +112,9 @@ void main() {
   testWidgets('picker cancellation and import errors leave project empty', (
     tester,
   ) async {
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      VideoImporter.channel,
-      (_) async => null,
-    );
+    mockMediaImport(() async => null);
     final fake = FakeEngine();
+    await phoneSurface(tester);
     await tester.pumpWidget(
       EngineScope(previewEnabled: false,
         engine: fake,
@@ -134,37 +122,30 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add clip'));
+    await addVideo(tester);
+    expect((await fake.getState()).clips, isEmpty);
+    mockMediaImport(() async => throw PlatformException(code: 'video_import', message: 'Storage full'));
+    await tester.tap(find.text('Import video'));
     await tester.pumpAndSettle();
     expect((await fake.getState()).clips, isEmpty);
-    messenger.setMockMethodCallHandler(
-      VideoImporter.channel,
-      (_) async => throw PlatformException(
-        code: 'video_import',
-        message: 'Storage full',
-      ),
-    );
-    await tester.tap(find.byTooltip('Add clip'));
-    await tester.pumpAndSettle();
-    expect((await fake.getState()).clips, isEmpty);
-    expect(find.textContaining('Could not import video'), findsOneWidget);
+    expect(find.text('Storage full'), findsOneWidget);
   });
 
   testWidgets(
     'timeline scroll seeks Rust state and split uses the confirmed playhead',
     (tester) async {
       final fake = FakeEngine();
-      await tester.pumpWidget(
+      await phoneSurface(tester);
+    await tester.pumpWidget(
         EngineScope(previewEnabled: false,
           engine: fake,
           child: const MaterialApp(home: EditorHome()),
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Add clip'));
-      await tester.pumpAndSettle();
+      await addVideo(tester);
       await tester.drag(
-        find.byType(SingleChildScrollView),
+        find.byWidgetPredicate((widget) => widget is SingleChildScrollView && widget.controller != null),
         const Offset(-75, 0),
       );
       await tester.pumpAndSettle();

@@ -31,12 +31,125 @@ void main() {
       '../../rust/target/debug/$name';
   final available = File(library).existsSync();
 
-  test(
-    'real bridge edits persist to disk and reopen with identical project data',
-    () async {
+  setUpAll(() async {
+    if (available)
       await RustLib.init(
         externalLibrary: ExternalLibrary.open(File(library).absolute.path),
       );
+  });
+
+  test(
+    'overlapping audio and images survive real bridge autosave and reopen',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'charpcut_overlap_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final session = ProjectSession(
+        const RustEditorEngine(),
+        DiskStore(directory),
+      );
+      await session.newProject();
+      for (final kind in ['audio', 'image', 'overlay']) {
+        await session.addTimelineMedia(
+          path: '$kind-one',
+          durationMs: 4000,
+          kind: kind,
+        );
+        var state = await session.addTimelineMedia(
+          path: '$kind-two',
+          durationMs: 4000,
+          kind: kind,
+        );
+        final id = state.selectedClipId!;
+        state = await session.applyTimelineEdit({
+          'action': 'shift',
+          'clip_ids': [id],
+          'delta_ms': -3000,
+        });
+        expect(state.lastError, isNull);
+        expect(state.selectedClip!.startMs, 1000);
+      }
+      final saved = await session.exportProjectJson();
+      final state = await session.openProjectJson(saved);
+      expect(state.lastError, isNull);
+      expect(state.audioClips.map((c) => c.startMs), [0, 1000]);
+      expect(state.imageClips.map((c) => c.startMs), [0, 1000]);
+      expect(state.overlayClips.map((c) => c.startMs), [0, 1000]);
+    },
+    skip: !available,
+  );
+
+  test(
+    'Phase 4 properties, batch edits, and track order save and undo through the real bridge',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'charpcut_phase4_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final session = ProjectSession(
+        const RustEditorEngine(),
+        DiskStore(directory),
+      );
+      await session.newProject();
+      await session.addClip(path: 'a.mp4', durationMs: 4000);
+      final draft = (await session.listDrafts()).single.id;
+      var state = await session.getState();
+      state = await session.applyTimelineEdit({
+        'action': 'properties',
+        'clip_id': state.clips.single.id,
+        'start_ms': 1000,
+        'duration_ms': 4000,
+        'properties': {
+          ...state.clips.single.properties.toJson(),
+          'scale': 1.5,
+          'rotation': 45.0,
+          'opacity': .6,
+          'volume': .3,
+        },
+      });
+      expect(state.lastError, null);
+      expect(state.clips.single.startMs, 1000);
+      expect(state.clips.single.properties.scale, 1.5);
+      expect(state.clips.single.properties.rotation, 45);
+      expect(state.clips.single.properties.opacity, .6);
+      expect(state.clips.single.properties.volume, .3);
+      await session.undo();
+      expect((await session.getState()).clips.single.properties.scale, 1);
+      await session.redo();
+      final saved = (await session.listDrafts()).single.json;
+      state = await session.openDraft(draft);
+      expect(state.clips.single.properties.scale, 1.5);
+      final id = state.clips.single.id;
+      state = await session.applyTimelineEdit({
+        'action': 'duplicate',
+        'clip_ids': [id],
+      });
+      expect(state.clips, hasLength(2));
+      expect(state.clips.last.properties.volume, .3);
+      await session.undo();
+      expect((await session.listDrafts()).single.json, saved);
+      await session.addTimelineMedia(
+        path: 'overlay.png',
+        durationMs: 3000,
+        kind: 'overlay',
+      );
+      state = await session.getState();
+      final order = state.tracks.reversed.map((t) => t.id).toList();
+      state = await session.applyTimelineEdit({
+        'action': 'reorder_tracks',
+        'track_ids': order,
+      });
+      expect(state.tracks.first.kind, 'overlay');
+      await session.save();
+      expect((await session.openDraft(draft)).tracks.first.kind, 'overlay');
+    },
+    skip: !available,
+  );
+
+  test(
+    'real bridge edits persist to disk and reopen with identical project data',
+    () async {
       final directory = await Directory.systemTemp.createTemp(
         'charpcut_bridge_',
       );
@@ -57,10 +170,10 @@ void main() {
       expect((await session.getState()).clips.first.durationMs, 1500);
       await session.redo();
       await session.save();
-      final saved = await store.read(ProjectSlot.saved);
-      expect(jsonDecode(saved!)['version'], 2);
+      final saved = (await session.listDrafts()).single.json;
+      expect(jsonDecode(saved)['version'], 5);
       await session.deleteSelected();
-      expect(await store.read(ProjectSlot.saved), saved);
+      expect((await session.listDrafts()).single.json, isNot(saved));
       await session.newProject();
       final state = await session.openProjectJson(saved);
       expect(state.lastError, null);
@@ -68,7 +181,7 @@ void main() {
       expect(state.mainTrackMuted, true);
       expect(state.playheadMs, 0);
       expect(jsonDecode(await session.exportProjectJson()), jsonDecode(saved));
-      final before = await store.read(ProjectSlot.draft);
+      final before = await store.read(ProjectSlot.library);
       expect((await session.openProjectJson('bad JSON')).lastError, isNotNull);
       final newer = jsonDecode(saved) as Map<String, dynamic>;
       newer['version'] = 999;
@@ -76,7 +189,7 @@ void main() {
         (await session.openProjectJson(jsonEncode(newer))).lastError,
         isNotNull,
       );
-      expect(await store.read(ProjectSlot.draft), before);
+      expect(await store.read(ProjectSlot.library), before);
       final legacy = jsonDecode(saved) as Map<String, dynamic>;
       legacy['version'] = 1;
       for (final track in legacy['tracks']) {
@@ -85,7 +198,7 @@ void main() {
       final migrated = await session.openProjectJson(jsonEncode(legacy));
       expect(migrated.lastError, null);
       expect(migrated.mainTrackMuted, false);
-      expect(jsonDecode(await session.exportProjectJson())['version'], 2);
+      expect(jsonDecode(await session.exportProjectJson())['version'], 5);
     },
     skip: available
         ? false

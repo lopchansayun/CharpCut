@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1985487456;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 987910271;
 
 // Section: executor
 
@@ -81,6 +81,78 @@ fn wire__crate__api__add_clip_impl(
         },
     )
 }
+fn wire__crate__api__add_timeline_media_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "add_timeline_media",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            let api_duration_ms = <i64>::sse_decode(&mut deserializer);
+            let api_kind = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::add_timeline_media(
+                        api_path,
+                        api_duration_ms,
+                        api_kind,
+                    ))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__apply_timeline_edit_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "apply_timeline_edit",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_json = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::apply_timeline_edit(api_json))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__delete_selected_clip_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -107,6 +179,38 @@ fn wire__crate__api__delete_selected_clip_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Ok::<_, ()>(crate::api::delete_selected_clip())?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__duplicate_selected_clip_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "duplicate_selected_clip",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::duplicate_selected_clip())?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -406,6 +510,41 @@ fn wire__crate__api__set_main_track_muted_impl(
         },
     )
 }
+fn wire__crate__api__set_track_locked_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_track_locked",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_kind = <String>::sse_decode(&mut deserializer);
+            let api_locked = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Ok::<_, ()>(crate::api::set_track_locked(api_kind, api_locked))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__split_selected_clip_at_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -586,19 +725,23 @@ fn pde_ffi_dispatcher_primary_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         1 => wire__crate__api__add_clip_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__delete_selected_clip_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__export_project_json_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__get_editor_state_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__move_selected_clip_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__new_project_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__open_project_json_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__redo_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__seek_playhead_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__select_clip_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__set_main_track_muted_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__split_selected_clip_at_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__trim_selected_clip_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__undo_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__add_timeline_media_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__apply_timeline_edit_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__delete_selected_clip_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__duplicate_selected_clip_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__export_project_json_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__get_editor_state_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__move_selected_clip_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__new_project_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__open_project_json_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__redo_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__seek_playhead_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__select_clip_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__set_main_track_muted_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__set_track_locked_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__split_selected_clip_at_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__trim_selected_clip_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__undo_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

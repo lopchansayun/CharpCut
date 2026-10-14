@@ -116,10 +116,10 @@ class _ExportPanelState extends State<ExportPanel> {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          _tab('video', !_gif, () => setState(() => _gif = false)),
-          const SizedBox(width: 20),
-          _tab('GIF', _gif, () => setState(() => _gif = true)),
-          const Spacer(),
+          Expanded(child: Row(children: [
+            Expanded(child: _tab('video', !_gif, () => setState(() => _gif = false))),
+            Expanded(child: _tab('GIF', _gif, () => setState(() => _gif = true))),
+          ])),
           GestureDetector(
             onTap: widget.onClose,
             child: Container(
@@ -294,11 +294,7 @@ class _ExportPanelState extends State<ExportPanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-              ],
-            ),
+            Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(subtitle, style: TextStyle(color: subtitleColor, fontSize: 13, height: 1.25)),
           ],

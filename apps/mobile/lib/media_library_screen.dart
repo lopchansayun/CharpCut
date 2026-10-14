@@ -4,17 +4,18 @@ import 'package:flutter/services.dart';
 import 'engine/media_library.dart';
 import 'media_thumbnail.dart';
 
-/// Device imports can be reused across projects. Only video placement is part
-/// of the current timeline; audio/image track editing belongs to later phases.
+/// Device imports can be reused across projects and placed on timeline tracks.
 class MediaLibraryScreen extends StatefulWidget {
-  const MediaLibraryScreen({super.key, this.selectVideo = false, this.initialFilter = 'all'});
+  const MediaLibraryScreen({super.key, this.selectVideo = false, this.selectKind, this.initialFilter = 'all'});
   final bool selectVideo;
+  final String? selectKind;
   final String initialFilter;
   @override
   State<MediaLibraryScreen> createState() => _MediaLibraryScreenState();
 }
 
 class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
+  String? get _selectionKind => widget.selectKind ?? (widget.selectVideo ? 'video' : null);
   final _library = MediaLibrary();
   late Future<List<LibraryMedia>> _items;
   late String _filter;
@@ -23,7 +24,7 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
   @override
   void initState() {
     super.initState();
-    _filter = widget.selectVideo ? 'video' : widget.initialFilter;
+    _filter = _selectionKind ?? widget.initialFilter;
     _items = _library.list();
   }
   void _refresh() {
@@ -44,7 +45,7 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
       if (item != null && mounted) {
         setState(() { _filter = kind; });
         _refresh();
-        if (widget.selectVideo && kind == 'video') {
+        if (_selectionKind == kind) {
           Navigator.pop(context, item);
         } else {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${item.name} imported')));
@@ -60,7 +61,7 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
     try {
       final fresh = await _library.inspect(item.path);
       if (!mounted) return;
-      if (widget.selectVideo && fresh.kind == 'video') {
+      if (_selectionKind == fresh.kind) {
         Navigator.pop(context, fresh);
       } else {
         await _details(fresh);
@@ -97,10 +98,6 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
             if (item.audioStreams[i]['bitrate'] != null) Text('${item.audioStreams[i]['bitrate']} bits/s'),
             if (item.audioStreams[i]['decodable'] == false) const Text('This device cannot decode this audio stream.'),
           ],
-          if (item.kind != 'video') ...[
-            const SizedBox(height: 16),
-            const Text('Saved in your library. Adding images and audio to timeline tracks is coming in a later update.'),
-          ],
           const SizedBox(height: 16),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
         ]),
@@ -110,13 +107,13 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.selectVideo ? 'Add video' : 'Media library'), actions: [
+    appBar: AppBar(title: Text(_selectionKind == null ? 'Media library' : 'Add $_selectionKind'), actions: [
       IconButton(tooltip: 'Refresh', onPressed: _busy ? null : _refresh, icon: const Icon(Icons.refresh)),
     ]),
     body: Column(children: [
       if (_busy) const LinearProgressIndicator(),
       Padding(padding: const EdgeInsets.all(12), child: Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final kind in widget.selectVideo ? ['video'] : ['video', 'audio', 'image'])
+        for (final kind in _selectionKind == null ? ['video', 'audio', 'image'] : [_selectionKind!])
           FilledButton.tonalIcon(onPressed: _busy ? null : () => _import(kind),
             icon: const Icon(Icons.file_upload_outlined), label: Text('Import $kind')),
       ])),
@@ -124,7 +121,7 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
         decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search imported media'),
         onChanged: (value) => setState(() => _query = value.toLowerCase()),
       )),
-      if (!widget.selectVideo) Padding(padding: const EdgeInsets.all(12), child: Wrap(spacing: 8, children: [
+      if (_selectionKind == null) Padding(padding: const EdgeInsets.all(12), child: Wrap(spacing: 8, children: [
         for (final kind in ['all', 'video', 'audio', 'image'])
           ChoiceChip(label: Text(kind[0].toUpperCase() + kind.substring(1)), selected: _filter == kind,
               onSelected: (_) => setState(() => _filter = kind)),
@@ -148,7 +145,7 @@ class _MediaLibraryScreenState extends State<MediaLibraryScreen> {
             title: Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis),
             subtitle: Text(item.available ? item.summary : item.error ?? 'Media unavailable; import it again'),
             isThreeLine: !item.available,
-            trailing: Icon(widget.selectVideo && item.available ? Icons.add_circle_outline : Icons.info_outline),
+            trailing: Icon(_selectionKind == item.kind && item.available ? Icons.add_circle_outline : Icons.info_outline),
             onTap: _busy ? null : () => _open(item),
           );
         });

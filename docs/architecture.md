@@ -10,7 +10,7 @@ Flutter UI → ProjectSession → RustEditorEngine → generated bridge → Rust
        Android AtomicFile ← autosave                 EditorState → Flutter UI → Media3 preview
 ```
 
-The first three phases have been exercised on an Android device by the project owner. Exceptional cases such as a loaded timeline with gaps and every possible codec are not covered by that report. Real export is still planned.
+The project owner accepted Phases 1–4 on an Android device, confirming Phase 4 complete on 2026-10-14. Exceptional cases such as a loaded timeline with gaps and every possible codec are not covered by that report. Real export is still planned.
 
 ## Code map
 
@@ -32,7 +32,7 @@ The first three phases have been exercised on an Android device by the project o
 
 ## Projects and media
 
-`ProjectSession` serializes engine calls and disk writes so an older autosave cannot replace a newer edit. Successful project edits autosave the JSON returned by Rust. Selection and playhead position are transient. Storage errors leave the successful in-memory edit visible and are surfaced to the user. Schema 2 persists main-track mute and migrates schema 1; newer or invalid projects are refused by Rust.
+`ProjectSession` serializes engine calls and disk writes so an older autosave cannot replace a newer edit. Successful project edits autosave the JSON returned by Rust. Selection and playhead position are transient. Storage errors leave the successful in-memory edit visible and are surfaced to the user. Schema 5 allows overlapping secondary clips and records media type, track locks/order, and clip properties; it migrates schemas 1–4, adding default properties for older clips. Newer or invalid projects are refused by Rust.
 
 The Android project channel writes `projects/library.charpcut.json` with `AtomicFile`. Each draft has an independent library ID, name, edit time, and complete Rust project JSON. On first access, the old `draft` and `saved` slots migrate once; those files stay as backups. New video starts a separate draft; an untouched empty editor does not create one. Save flushes the active draft. Opening another project first retries any failed autosave. Rename, duplicate, and delete update the library atomically. A duplicate copies the snapshot under a new library ID; its source files may still be shared with other drafts.
 
@@ -42,11 +42,13 @@ Thumbnails are Android-decoded frames stored under `cache/media-thumbnails/`, ca
 
 ## Preview
 
-`EditorState` parses the Rust snapshot, including clip paths/ranges, project canvas dimensions, frame rate, playhead, and mute. Flutter sends an immutable projection of those ranges and total duration to the Android platform view. Media3 plays consecutive clipped videos on one clock, with their source audio. Valid timeline gaps use silence sources and a black overlay. Current UI editing operations repack the main video track without gaps. Fades and crossfades require Phase 5 effect data.
+`EditorState` parses the Rust snapshot, including video, audio, image and image-overlay clip paths/ranges, project canvas dimensions, frame rate, playhead, and track state. Flutter sends an immutable projection of video and audio ranges and total duration to the Android platform view. Media3 plays clipped videos and separate synchronized audio playlists for overlapping lanes, seeking the audio player when it drifts from the video clock. Flutter composites video, still-image and overlay lanes in saved track order on the project canvas. Each layer applies normalized translation, scale, rotation, per-edge canvas crop, and opacity. Native video/audio players apply clip volume at playlist transitions. Valid gaps use silence sources; the missing visual layer is transparent over the black canvas. Numeric placement and delete-only can create gaps. Batch moves reject main-video overlaps but allow overlapping audio, image, and overlay clips. Secondary trim and deletion preserve neighboring positions; main-video trim and ripple delete shift later clips by the duration change; explicit clip reorder repacks its lane. Fades and crossfades require Phase 5 effect data.
 
 Native playback positions return to Rust through the transient seek API. User scrubbing pauses playback; pending seeks settle before edits. Commands carry revisions so old native callbacks cannot replace a newer state. Exact seek is requested, while actual decoded precision depends on the media. Media3 reports buffering, aspect ratio, and errors; errors remain visible until the user retries or changes the timeline. The player pauses on backgrounding, audio interruption, or headphone disconnection, and releases its decoder when its view closes.
 
-Fullscreen uses the same player as the editor. Source fit, project-canvas fit, pinch zoom, pan, zoom buttons, and reset affect viewing only. The rotation button requests landscape or portrait; Android may restrict orientation or immersive UI on some devices. Saved crop/scale changes are a separate Phase 4 feature.
+Fullscreen uses the same player as the editor in playback-only mode. Entering fullscreen resets inspection zoom and disables layer selection, manipulation, and viewing gestures; saved clip transforms still render. The preview fits the project canvas, with each source fitted inside it, with inspection zoom, pan, and double-tap reset available in the editor when no layer is selected. Zoom buttons, the zoom readout, and the fit/instruction text row are removed to keep the preview clear. The rotation button requests landscape or portrait; Android may restrict orientation or immersive UI on some devices. Saved properties compose inside the independent viewing transform.
+
+The editor uses a stable preview element and a side-by-side layout on wide landscape screens. Timeline lanes scroll vertically when height is limited. Keyboard insets do not resize the project; numeric input dialogs remain top-anchored, reserve keyboard space without an inset animation, and scroll when necessary. Go-to-time, trim, and image-duration dialogs own and dispose their controllers with their route widgets, and pause playback while entering values. The Snap/keyframe control uses an in-editor long-press hint instead of a tooltip overlay.
 
 ## Bridge and Android build
 
@@ -60,6 +62,18 @@ The Gradle build does not rebuild Rust automatically. Build the native library w
 
 ## Verification and remaining work
 
-The project owner confirmed the Phase 1–3 user flows on Android. Earlier recorded automated results were 41 Rust tests and 33 Flutter tests, before the later Phase 2–3 changes. Those older numbers do not validate the current code; some tests still assume the prior direct-picker and two-slot storage flow. The assistant did not rerun builds or tests for these updates at the owner's request.
+On 2026-10-14, 46 Rust tests passed (29 engine, 17 timeline). The Flutter suite now covers 46 tests, including property forms, multi-select, local playback snapshots, trim bounds and commit timing, layer dragging/locking/scaling/rotation, and keyboard anchoring. The real bridge checks saved properties, undo/redo, batch duplication, and track order across reopen. Rust tests additionally cover invalid crop/volume, overlaps, lock rejection, atomic rollback, and schema migration. Existing phone-layout and legacy-flow regressions remain covered.
 
-The [roadmap](FEATURE_ROADMAP.md) tracks the next phases. Audio/image timeline tracks, effects, text, cover editing, true export, and iOS parity are not implemented. The approved [render-engine decision](decisions/0001-render-engine.md) calls for a dedicated Rust edit list and shared preview/export contract when composition and export expand.
+The Windows test library and all three Android libraries (arm64-v8a, armeabi-v7a, x86_64) were rebuilt. Android `:app:compileDebugKotlin --offline` succeeded. Dart analysis found no errors, with existing style warnings and an `onReorder` deprecation notice. No app was launched. The owner subsequently accepted Phase 4, including preview/audio features and fullscreen behavior, on 2026-10-14. No tests or builds were rerun for this documentation-only update.
+
+The bridge exposes `apply_timeline_edit` as a JSON command decoded to a typed Rust enum. Properties, batch shift/duplicate/delete, and track reorder validate against the entire project and commit as one undo step. Failures restore the prior project and selection and do not autosave. Multi-selection is transient Flutter state, passed as explicit distinct clip IDs; it is not project data.
+
+The [roadmap](FEATURE_ROADMAP.md) tracks the next phases. Effects, text, cover editing, true export, and iOS parity remain. The approved [render-engine decision](decisions/0001-render-engine.md) calls for a dedicated Rust edit list and shared preview/export contract when composition and export expand.
+
+### Direct manipulation and playback updates
+
+`PreviewLayerControls` hit-tests visual layers in reverse compositing order and drafts position, scale and rotation locally. The layer menu can select obscured layers. Gesture release sends a single validated properties command; locked tracks suppress transform/delete handles. `ClipTrimHandle` commits one trim command on release. The preview range slider is removed, and the main video has no floating delete/transform buttons; direct canvas gestures remain available in the editor and are disabled in fullscreen.
+
+During playback, `EditorState.atPlayhead` reuses immutable project lists. Rust receives the final playhead on pause/end or explicit seek, rather than returning a project snapshot every tick. Media3 waits for all playlists to be ready, suppresses duplicate status events, adjusts audio speed by at most two percent for small drift, and reserves seeks for large drift with a cooldown. These changes reduce bridge/decoder work; they are not a device performance measurement.
+
+Secondary clips permit overlapping ranges in schema 5; video still rejects overlaps. Flutter packs intervals into visible timeline rows and long-press dragging commits a single shift command. The preview renders every active visual clip, with a stable native surface for the main video. Android packs non-overlapping audio clips into playlists, adding a decoder only for concurrent lanes; silence fills gaps and each lane follows the main clock. Overlap persistence, undo/redo, row packing, active visual composition, and the clean main-video controls have regression coverage. The owner accepted audible playback in device testing. Broader resource and long-project performance testing remains Phase 8 work.

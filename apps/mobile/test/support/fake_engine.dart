@@ -43,6 +43,7 @@ class FakeEngine implements EditorEngine {
     startMs: startMs ?? c.startMs,
     sourceInMs: sourceInMs ?? c.sourceInMs,
     durationMs: durationMs ?? c.durationMs,
+    sourceDurationMs: c.sourceDurationMs,
   );
 
   void _ripple() {
@@ -75,6 +76,10 @@ class FakeEngine implements EditorEngine {
   }
 
   @override
+  Future<EditorState> applyTimelineEdit(Map<String, dynamic> edit) async =>
+      throw UnsupportedError('Batch edits are tested against the real Rust engine');
+
+  @override
   Future<EditorState> newProject() async {
     _clips = [];
     _muted = false;
@@ -105,6 +110,9 @@ class FakeEngine implements EditorEngine {
       return null;
     });
   }
+
+  @override
+  Future<EditorState> setTrackLocked(String kind, bool locked) async => _state();
 
   @override
   Future<EditorState> moveSelected(int targetIndex) async {
@@ -147,11 +155,16 @@ class FakeEngine implements EditorEngine {
       startMs: 0,
       sourceInMs: 0,
       durationMs: durationMs,
+      sourceDurationMs: durationMs,
     ));
     _ripple();
     _selected = 'clip-$n';
     return null;
   });
+
+  @override
+  Future<EditorState> addTimelineMedia({required String path, required int durationMs, required String kind}) =>
+      addClip(path: path, durationMs: durationMs);
 
   @override
   Future<EditorState> splitSelectedAt(int timelineMs) async => _edit('Clip split', () {
@@ -189,6 +202,17 @@ class FakeEngine implements EditorEngine {
   });
 
   @override
+  Future<EditorState> duplicateSelected() async => _edit('Clip duplicated', () {
+    final clip = _clips.where((c) => c.id == _selected).firstOrNull;
+    if (clip == null) return 'Select a clip first';
+    final copy = _copy(clip, id: 'clip-${_next++}');
+    _clips.insert(_clips.indexOf(clip) + 1, copy);
+    _ripple();
+    _selected = copy.id;
+    return null;
+  });
+
+  @override
   Future<EditorState> undo() async {
     if (_undo.isEmpty) {
       _error = 'Nothing to undo';
@@ -221,16 +245,17 @@ class FakeEngine implements EditorEngine {
   @override
   Future<String> exportProjectJson() async => jsonEncode({
     'id': 'test-project',
-    'version': 2,
+    'version': 5,
     'settings': {'width': 1080, 'height': 1920, 'fps_num': 30, 'fps_den': 1},
     'assets': [
       for (final id in _clips.map((c) => c.assetId).toSet())
         {
           'id': id,
+          'kind': 'Video',
           'path': '${_clips.firstWhere((c) => c.assetId == id).name}.mp4',
           'duration_ms': _clips
               .where((c) => c.assetId == id)
-              .map((c) => c.sourceInMs + c.durationMs)
+              .map((c) => c.sourceDurationMs)
               .reduce((a, b) => a > b ? a : b),
         },
     ],
@@ -239,6 +264,7 @@ class FakeEngine implements EditorEngine {
         'id': 'main',
         'kind': 'Video',
         'muted': _muted,
+        'locked': false,
         'clips': [
           for (final c in _clips)
             {
@@ -247,6 +273,7 @@ class FakeEngine implements EditorEngine {
               'timeline_start_ms': c.startMs,
               'source_in_ms': c.sourceInMs,
               'duration_ms': c.durationMs,
+              'properties': c.properties.toJson(),
             },
         ],
       },
@@ -257,7 +284,7 @@ class FakeEngine implements EditorEngine {
   Future<EditorState> openProjectJson(String json) async {
     try {
       final project = jsonDecode(json) as Map<String, dynamic>;
-      if (![1, 2].contains(project['version'])) {
+      if (![1, 2, 3, 4, 5].contains(project['version'])) {
         throw const FormatException('Unsupported project version');
       }
       final state = EditorState.fromJson(

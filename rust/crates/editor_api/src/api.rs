@@ -5,6 +5,7 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::engine::Engine;
+use charpcut_timeline::{MediaKind, TrackKind};
 
 static ENGINE: OnceLock<Mutex<Engine>> = OnceLock::new();
 
@@ -47,6 +48,21 @@ pub fn set_main_track_muted(muted: bool) -> String {
     e.snapshot_json()
 }
 
+/// Locks or unlocks clips on one timeline track.
+pub fn set_track_locked(kind: String, locked: bool) -> String {
+    let mut e = engine();
+    let track_kind = match kind.as_str() {
+        "video" => Some(TrackKind::Video),
+        "audio" => Some(TrackKind::Audio),
+        "image" => Some(TrackKind::Image),
+        "overlay" => Some(TrackKind::Overlay),
+        _ => None,
+    };
+    if let Some(track_kind) = track_kind { e.set_track_locked(track_kind, locked); }
+    else { e.reject("Unsupported track type"); }
+    e.snapshot_json()
+}
+
 /// Moves the selected clip to a final zero-based index on the gapless track.
 pub fn move_selected_clip(target_index: i64) -> String {
     let mut e = engine();
@@ -68,6 +84,23 @@ pub fn add_clip(path: String, duration_ms: i64) -> String {
     e.snapshot_json()
 }
 
+/// Appends imported audio or an image to its editable timeline track.
+pub fn add_timeline_media(path: String, duration_ms: i64, kind: String) -> String {
+    let mut e = engine();
+    let media_kind = match kind.as_str() {
+        "video" => Some(MediaKind::Video),
+        "audio" => Some(MediaKind::Audio),
+        "image" | "overlay" => Some(MediaKind::Image),
+        _ => None,
+    };
+    if let Some(media_kind) = media_kind {
+        e.add_timeline_media(&path, millis(duration_ms), media_kind, kind == "overlay");
+    } else {
+        e.reject("Unsupported media type");
+    }
+    e.snapshot_json()
+}
+
 /// Splits the selected clip at a position on the timeline (the playhead).
 pub fn split_selected_clip_at(timeline_ms: i64) -> String {
     let mut e = engine();
@@ -86,6 +119,13 @@ pub fn trim_selected_clip(source_in_ms: i64, duration_ms: i64) -> String {
 pub fn delete_selected_clip() -> String {
     let mut e = engine();
     e.delete_selected();
+    e.snapshot_json()
+}
+
+/// Inserts a copy of the selected clip directly after it.
+pub fn duplicate_selected_clip() -> String {
+    let mut e = engine();
+    e.duplicate_selected();
     e.snapshot_json()
 }
 
@@ -113,5 +153,12 @@ pub fn export_project_json() -> String {
 pub fn open_project_json(json: String) -> String {
     let mut e = engine();
     e.open_json(&json);
+    e.snapshot_json()
+}
+
+/// Applies a validated, atomic batch or clip-property edit.
+pub fn apply_timeline_edit(json: String) -> String {
+    let mut e = engine();
+    e.apply_timeline_edit(&json);
     e.snapshot_json()
 }
